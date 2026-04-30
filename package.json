@@ -1,4 +1,8 @@
-"dependencies": {
+{
+  "name": "dhfc-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
     "express": "^4.19.2",
     "node-cron": "^3.0.3",
     "firebase": "^12.11.0",
@@ -10,3 +14,4 @@
     "react": "^18.1.0",
     "react-dom": "^18.1.0"
   }
+}
