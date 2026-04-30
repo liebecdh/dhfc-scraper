@@ -86,6 +86,12 @@ function startChatObserver() {
         title: `${senderName}님의 메시지 💬`,
         body: notifyBody
       },
+      // 👇 알림을 눌렀을 때 이동할 주소 꼬리표 추가!
+      webpush: {
+        fcmOptions: {
+          link: "/?tab=CHAT" 
+        }
+      },
       tokens: targetTokens
     };
 
