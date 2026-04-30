@@ -1,14 +1,27 @@
 import express from 'express';
 import cron from 'node-cron';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, getDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, onSnapshot } from 'firebase/firestore';
+import admin from 'firebase-admin'; // 👈 푸시 알림 쏠 때 쓸 마스터키 도구
 import { 
   runScheduleScraper, 
   runRankingsScraper, 
   runLineupScraper 
 } from './scraper.js';
 
-// 1. 서버 및 파이어베이스 설정 (기존 설정 활용)
+// 1. 파이어베이스 서버(마스터키) 초기화
+// (Render에 설정해둔 FIREBASE_SERVICE_ACCOUNT 환경변수를 꺼내옵니다)
+if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+  console.error("🚨 환경변수 FIREBASE_SERVICE_ACCOUNT가 없습니다. (푸시 알림 작동 불가)");
+} else {
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+  console.log("🔥 파이어베이스 관리자(Admin) 권한 장착 완료!");
+}
+
+// 2. 파이어베이스 클라이언트 설정 (기존 스크래핑 데이터 저장용)
 const firebaseConfig = {
   apiKey: "AIzaSyBKuKbTyQJwEwfsnMQni2X7hiZnS09oiF4",
   authDomain: "dhfc-shift.firebaseapp.com",
@@ -20,14 +33,73 @@ const fbApp = initializeApp(firebaseConfig);
 const db = getFirestore(fbApp);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-// 🚦 [신호등] 현재 스크래핑 진행 여부
 let isScraping = false; 
-// ⚽ [메모리] 오늘 대전 경기 정보 (킥오프 시간 등)
 let todayMatchInfo = null; 
+// 💬 [채팅 감시용 메모리] 가장 마지막에 날린 알림(메시지 ID) 기억하기
+let lastNotifiedMsgId = null;
 
-// 헬퍼: 안전한 실행 함수 (신호등 제어)
+// ==========================================
+// 🚨 [핵심] 24시간 실시간 채팅 감시 및 푸시 알림 엔진
+// ==========================================
+function startChatObserver() {
+  if (!admin.apps.length) return; // 관리자 권한 없으면 팅겨냄
+
+  const FAMILY_CODE = '조아'; // 👈 기획자님 가족 공유코드 (추후 환경변수로 빼도 됨)
+  const docRef = doc(db, 'artifacts', 'daejeon-shift-pro-test-sandbox', 'public', 'data', 'userSchedules_v305', FAMILY_CODE);
+
+  console.log("👀 실시간 채팅 감시 레이더 가동 완료...");
+
+  onSnapshot(docRef, (snap) => {
+    if (!snap.exists()) return;
+    const data = snap.data().content;
+    const chat = data.chat;
+    if (!chat || !chat.messages || chat.messages.length === 0) return;
+
+    // 방금 올라온 가장 따끈따끈한 최신 메시지 하나
+    const latestMsg = chat.messages[chat.messages.length - 1];
+
+    // 만약 이미 알림을 보낸 메시지라면 무시 (중복 방지)
+    if (lastNotifiedMsgId === latestMsg.id) return;
+    lastNotifiedMsgId = latestMsg.id;
+
+    // 가족들의 폰에 심어둔 알림 토큰(수신 주소) 꺼내오기
+    const tokensMap = chat.fcmTokens || {};
+    // 방금 채팅을 친 당사자의 폰(토큰)은 알림 명단에서 제외
+    const targetTokens = Object.entries(tokensMap)
+      .filter(([senderKey, token]) => senderKey !== latestMsg.sender && token)
+      .map(([senderKey, token]) => token);
+
+    if (targetTokens.length === 0) return; // 보낼 사람이 없으면 패스
+
+    // 보낼 사람의 프로필 정보 찾기 (App.js의 CHAT_PROFILES와 동일 구조)
+    const profiles = {
+      dad: { name: '아빠' }, mom: { name: '엄마' }, aseong: { name: '아성이' }, arang: { name: '아랑이' }
+    };
+    const senderName = profiles[latestMsg.sender]?.name || '가족';
+    const notifyBody = latestMsg.imageUrl ? '(사진)' : latestMsg.text;
+
+    // 구글 서버로 진짜 알림(Push) 발사!
+    const messagePayload = {
+      notification: {
+        title: `${senderName}님의 메시지 💬`,
+        body: notifyBody
+      },
+      tokens: targetTokens
+    };
+
+    admin.messaging().sendEachForMulticast(messagePayload)
+      .then((response) => {
+        console.log(`📨 푸시 알림 발송 성공: ${response.successCount}건 (실패: ${response.failureCount}건)`);
+      })
+      .catch((error) => {
+        console.error('❌ 푸시 알림 발송 에러:', error);
+      });
+  });
+}
+
+
 async function safeExecute(taskName, taskFn) {
   if (isScraping) {
     console.log(`🚦 [잠깐!] ${taskName} 실행 시도했으나, 이미 다른 작업이 진행 중입니다. 충돌 방지를 위해 스킵합니다.`);
@@ -45,7 +117,6 @@ async function safeExecute(taskName, taskFn) {
   }
 }
 
-// 헬퍼: 오늘 대전 경기 시간 확인 로직
 async function updateTodayMatchMemory() {
   const targetDocRef = doc(db, 'artifacts', 'daejeon-shift-pro-test-sandbox', 'public', 'data', 'userSchedules_v305', '조아');
   const snap = await getDoc(targetDocRef);
@@ -66,57 +137,45 @@ async function updateTodayMatchMemory() {
   }
 }
 
-// ==========================================
-// ⏰ 1. 매일 15:01분: 일정 전수 조사 (기획자님 룰)
-// ==========================================
 cron.schedule('1 15 * * *', async () => {
   await safeExecute('15시 마스터 일정 전수 업데이트', async () => {
-    await runScheduleScraper(true); // 2~12월 전수 조사
-    await updateTodayMatchMemory(); // 오늘 경기 시간 메모리에 저장
+    await runScheduleScraper(true); 
+    await updateTodayMatchMemory(); 
   });
 }, { timezone: "Asia/Seoul" });
 
-// ==========================================
-// ⏰ 2. 경기 날 14:00 ~ 22:00: 일정/순위 3분 주기 추적
-// ==========================================
 cron.schedule('*/3 14-22 * * *', async () => {
   await safeExecute('라이브 스코어/순위 실시간 추적', async () => {
-    await runScheduleScraper(false); // 이번 달만 갱신
-    await runRankingsScraper();      // 팀/개인 순위 갱신
+    await runScheduleScraper(false); 
+    await runRankingsScraper();      
   });
 }, { timezone: "Asia/Seoul" });
 
-// ==========================================
-// ⏰ 3. 라인업 & 평점 정밀 타격 (1분 주기로 조건 체크)
-// ==========================================
 cron.schedule('* * * * *', async () => {
   if (!todayMatchInfo || !todayMatchInfo.time) return;
 
   const now = new Date();
   const [hh, mm] = todayMatchInfo.time.split(':').map(Number);
   const kickoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm);
-  const diff = (kickoff - now) / 60000; // 분 단위 차이
+  const diff = (kickoff - now) / 60000; 
 
-  // (A) 킥오프 90분전 ~ 60분전: 라인업 1분 단위 수집
   if (diff <= 90 && diff >= 60) {
     await safeExecute('라인업 1분 단위 핀셋 타격', runLineupScraper);
   }
 
-  // (B) 킥오프 120분후 ~ 140분후: 평점/기록 3분 단위 수집
-  // (3분 주기를 맞추기 위해 현재 분이 3으로 나누어 떨어질 때만 실행)
   if (diff <= -120 && diff >= -140 && now.getMinutes() % 3 === 0) {
     await safeExecute('경기 종료 후 기록 스위핑', runLineupScraper);
   }
 
-  // (C) 밤 23:00 최종 마감 (마지막 1번 더)
   if (now.getHours() === 23 && now.getMinutes() === 0) {
     await safeExecute('오늘 경기 최종 기록 마감', runLineupScraper);
   }
 }, { timezone: "Asia/Seoul" });
 
-// 수면 모드 방지용 및 초기 가동
 app.get('/', (req, res) => res.send('⚽ DHFC Scraper Control Tower Active'));
+
 app.listen(PORT, async () => {
   console.log(`🚀 관제 서버가 포트 ${PORT}에서 시작되었습니다.`);
-  await updateTodayMatchMemory(); // 서버 켜지자마자 오늘 경기 있는지 확인
+  await updateTodayMatchMemory(); 
+  startChatObserver(); // 👈 서버 켜지자마자 채팅 감시 레이더 동시 가동!
 });
