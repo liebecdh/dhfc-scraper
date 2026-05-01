@@ -2,6 +2,9 @@
   "name": "dhfc-scraper",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "postinstall": "npx puppeteer browsers install chrome"
+  },
   "dependencies": {
     "express": "^4.19.2",
     "node-cron": "^3.0.3",
