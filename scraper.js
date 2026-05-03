@@ -32,13 +32,19 @@ const PLAYER_CATEGORIES = [
   { name: 'MOM', key: 'mom' }, { name: '평균평점', key: 'rating' }, { name: 'BEST11', key: 'best11' }
 ];
 
-// 🚨 [터보 모드 공통 함수] 불필요한 사진, 폰트, 광고를 전면 차단하여 속도 극대화
+// 🚨 [터보 모드 + 메모리 최적화]
 async function setupTurboPage(browser) {
     const page = await browser.newPage();
+    
+    // 1. 30초 제한 해제 (느려도 끝까지 기다림)
+    page.setDefaultNavigationTimeout(0);
+    page.setDefaultTimeout(0);
+
+    // 2. 사진/광고 전면 차단
     await page.setRequestInterception(true);
     page.on('request', (req) => {
-        if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
-            req.abort(); // 사진, 광고 등은 다운로드 취소!
+        if (['image', 'stylesheet', 'font', 'media', 'other'].includes(req.resourceType())) {
+            req.abort(); 
         } else {
             req.continue();
         }
@@ -49,17 +55,18 @@ async function setupTurboPage(browser) {
     return page;
 }
 
+// 🚨 클라우드 전용 크롬 실행 옵션
+const CHROME_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process'];
+
 // ==========================================
 // 1. [일정 스크래퍼] 
 // ==========================================
 export async function runScheduleScraper(isFullSync = false) {
     console.log(`\n🚀 [일정] ${isFullSync ? '전체 일정 마스터 갱신' : '라이브 일정 추적'} 시작...`);
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] }); 
+    const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS }); 
     const allMatches = {};
 
     try {
-        const page = await setupTurboPage(browser); // 터보 모드 페이지 생성
-
         const startMonth = isFullSync ? 2 : new Date().getMonth() + 1;
         const endMonth = isFullSync ? 12 : new Date().getMonth() + 1;
 
@@ -67,63 +74,69 @@ export async function runScheduleScraper(isFullSync = false) {
             const monthStr = m.toString().padStart(2, '0');
             console.log(`🔍 ${monthStr}월 데이터 추출 중...`);
             
-            // 🚨 타임아웃을 60초로 늘리고, 무거운 대기 모드(networkidle2) 해제
-            await page.goto(`https://m.sports.naver.com/kfootball/schedule/index?category=kleague&date=${TARGET_YEAR}-${monthStr}-01`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            // 🚨 [핵심] 매달 새로운 탭을 열어서 작업
+            const page = await setupTurboPage(browser); 
+            
+            try {
+                await page.goto(`https://m.sports.naver.com/kfootball/schedule/index?category=kleague&date=${TARGET_YEAR}-${monthStr}-01`, { waitUntil: 'domcontentloaded' });
 
-            await page.evaluate(async () => {
-                await new Promise((resolve) => {
-                    let totalHeight = 0; const distance = 400;
-                    const timer = setInterval(() => { window.scrollBy(0, distance); totalHeight += distance;
-                        if (totalHeight >= document.body.scrollHeight || totalHeight > 10000) { clearInterval(timer); window.scrollTo(0, 0); resolve(); }
-                    }, 150);
+                await page.evaluate(async () => {
+                    await new Promise((resolve) => {
+                        let totalHeight = 0; const distance = 400;
+                        const timer = setInterval(() => { window.scrollBy(0, distance); totalHeight += distance;
+                            if (totalHeight >= document.body.scrollHeight || totalHeight > 10000) { clearInterval(timer); window.scrollTo(0, 0); resolve(); }
+                        }, 150);
+                    });
                 });
-            });
-            await new Promise(r => setTimeout(r, 1000));
+                await new Promise(r => setTimeout(r, 1000));
 
-            const monthGames = await page.evaluate((year, vMap) => {
-                const results = {};
-                const matchItems = document.querySelectorAll('[class*="MatchBox_match_item"]');
+                const monthGames = await page.evaluate((year, vMap) => {
+                    const results = {};
+                    const matchItems = document.querySelectorAll('[class*="MatchBox_match_item"]');
 
-                matchItems.forEach(item => {
-                    const group = item.closest('[class*="ScheduleLeagueType_match_list_group"]');
-                    if (!group) return;
-                    const dateMatch = group.querySelector('[class*="ScheduleLeagueType_title"]')?.innerText.trim().match(/(\d+)월\s*(\d+)일/);
-                    if (!dateMatch) return;
-                    
-                    const cleanKey = `${year}-${parseInt(dateMatch[1])}-${parseInt(dateMatch[2])}`; 
-                    const roundStr = item.querySelector('[class*="MatchBox_add_info"]')?.innerText.trim() || "K리그1";
-                    const timeMatch = item.querySelector('[class*="MatchBox_time"]')?.innerText.match(/\d{2}:\d{2}/);
-                    const timeStr = timeMatch ? timeMatch[0] : "미정";
+                    matchItems.forEach(item => {
+                        const group = item.closest('[class*="ScheduleLeagueType_match_list_group"]');
+                        if (!group) return;
+                        const dateMatch = group.querySelector('[class*="ScheduleLeagueType_title"]')?.innerText.trim().match(/(\d+)월\s*(\d+)일/);
+                        if (!dateMatch) return;
+                        
+                        const cleanKey = `${year}-${parseInt(dateMatch[1])}-${parseInt(dateMatch[2])}`; 
+                        const roundStr = item.querySelector('[class*="MatchBox_add_info"]')?.innerText.trim() || "K리그1";
+                        const timeMatch = item.querySelector('[class*="MatchBox_time"]')?.innerText.match(/\d{2}:\d{2}/);
+                        const timeStr = timeMatch ? timeMatch[0] : "미정";
 
-                    let rawStatus = item.querySelector('[class*="MatchBox_status"]')?.innerText.trim() || "경기전";
-                    let appStatus = rawStatus.includes("종료") ? "경기종료" : (rawStatus === "예정" ? "경기전" : rawStatus);
+                        let rawStatus = item.querySelector('[class*="MatchBox_status"]')?.innerText.trim() || "경기전";
+                        let appStatus = rawStatus.includes("종료") ? "경기종료" : (rawStatus === "예정" ? "경기전" : rawStatus);
 
-                    const teamEls = item.querySelectorAll('[class*="MatchBoxHeadToHeadArea_team__"]');
-                    if (teamEls.length < 2) return;
-                    const homeTeam = teamEls[0].innerText.trim();
-                    const awayTeam = teamEls[1].innerText.trim();
+                        const teamEls = item.querySelectorAll('[class*="MatchBoxHeadToHeadArea_team__"]');
+                        if (teamEls.length < 2) return;
+                        const homeTeam = teamEls[0].innerText.trim();
+                        const awayTeam = teamEls[1].innerText.trim();
 
-                    const scoreEls = item.querySelectorAll('[class*="MatchBoxHeadToHeadArea_score__"]');
-                    let scoreStr = (scoreEls.length >= 2 && appStatus !== "경기전") ? `${scoreEls[0].innerText.trim()} : ${scoreEls[1].innerText.trim()}` : "";
+                        const scoreEls = item.querySelectorAll('[class*="MatchBoxHeadToHeadArea_score__"]');
+                        let scoreStr = (scoreEls.length >= 2 && appStatus !== "경기전") ? `${scoreEls[0].innerText.trim()} : ${scoreEls[1].innerText.trim()}` : "";
 
-                    const involvesDaejeon = homeTeam.includes('대전') || awayTeam.includes('대전');
-                    const isDaejeonHome = homeTeam.includes('대전');
-                    const matchType = involvesDaejeon ? (isDaejeonHome ? "H" : "A") : "O";
+                        const involvesDaejeon = homeTeam.includes('대전') || awayTeam.includes('대전');
+                        const isDaejeonHome = homeTeam.includes('대전');
+                        const matchType = involvesDaejeon ? (isDaejeonHome ? "H" : "A") : "O";
 
-                    let venueText = "";
-                    const matchedHomeTeamKey = Object.keys(vMap).find(t => homeTeam.includes(t));
-                    if (matchedHomeTeamKey) { venueText = vMap[matchedHomeTeamKey]; if (involvesDaejeon) venueText += isDaejeonHome ? "(홈)" : "(원정)"; } 
-                    else { venueText = `${homeTeam} 홈구장`; }
+                        let venueText = "";
+                        const matchedHomeTeamKey = Object.keys(vMap).find(t => homeTeam.includes(t));
+                        if (matchedHomeTeamKey) { venueText = vMap[matchedHomeTeamKey]; if (involvesDaejeon) venueText += isDaejeonHome ? "(홈)" : "(원정)"; } 
+                        else { venueText = `${homeTeam} 홈구장`; }
 
-                    // 🚨 [수정 완료] 증식 버그 방지 (순번 꼬리표 제거)
-                    const uniqueKey = `${cleanKey}_${homeTeam}_${awayTeam}`;
+                        const uniqueKey = `${cleanKey}_${homeTeam}_${awayTeam}`;
 
-                    results[uniqueKey] = { title: roundStr, opponent: involvesDaejeon ? (isDaejeonHome ? awayTeam : homeTeam) : awayTeam, match: `${homeTeam} vs ${awayTeam}`, homeTeam, awayTeam, time: timeStr, venue: venueText, type: matchType, score: scoreStr, status: appStatus, dateKey: cleanKey, naverGameId: item.querySelector('a[href*="/game/"]')?.getAttribute('href')?.match(/\d+/)?.[0] || "" };
-                });
-                return results;
-            }, TARGET_YEAR, VENUE_MAP);
+                        results[uniqueKey] = { title: roundStr, opponent: involvesDaejeon ? (isDaejeonHome ? awayTeam : homeTeam) : awayTeam, match: `${homeTeam} vs ${awayTeam}`, homeTeam, awayTeam, time: timeStr, venue: venueText, type: matchType, score: scoreStr, status: appStatus, dateKey: cleanKey, naverGameId: item.querySelector('a[href*="/game/"]')?.getAttribute('href')?.match(/\d+/)?.[0] || "" };
+                    });
+                    return results;
+                }, TARGET_YEAR, VENUE_MAP);
 
-            Object.assign(allMatches, monthGames);
+                Object.assign(allMatches, monthGames);
+            } finally {
+                // 🚨 [핵심] 한 달 스크랩이 끝나면 즉시 탭을 닫아 메모리 비우기!
+                await page.close(); 
+            }
         }
         
         const targetDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'userSchedules_v305', FAMILY_KEY);
@@ -145,14 +158,14 @@ export async function runScheduleScraper(isFullSync = false) {
 // ==========================================
 export async function runRankingsScraper() {
   console.log(`\n🚀 [순위] ${TARGET_YEAR}년 랭킹 데이터 수집 시작...`);
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+  const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS });
   
   try {
-    const page = await setupTurboPage(browser); // 터보 모드 장착
+    const page = await setupTurboPage(browser); 
     let teamStandings = [];
     const finalPlayerRankings = {};
 
-    await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded' });
 
     console.log(`🛡️ [팀 순위] 데이터 추출 중...`);
     await page.evaluate(() => { const teamBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('팀 순위')); if(teamBtn) teamBtn.click(); });
@@ -207,7 +220,7 @@ export async function runRankingsScraper() {
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+  const browser = await puppeteer.launch({ headless: true, args: CHROME_ARGS });
 
   try {
     const targetDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'userSchedules_v305', FAMILY_KEY);
@@ -218,7 +231,6 @@ export async function runLineupScraper() {
     const fixtures = content.kLeagueFixtures;
     const now = new Date();
     
-    // 🚨 [수정 완료] 10월 버그 수정된 안전한 날짜 변환기 탑재
     const parseSafeDate = (dateKey, timeStr = '00:00') => {
         const [y, m, d] = dateKey.split('-').map(Number);
         const [hh, mm] = (timeStr === '미정' ? '00:00' : timeStr).split(':').map(Number);
@@ -236,8 +248,8 @@ export async function runLineupScraper() {
     if (!targetMatch || !targetMatch.naverGameId) { console.log(`⚠️ 수집 가능한 대전 경기를 찾을 수 없습니다.`); return; }
     console.log(`🎯 타겟팅 성공: [${targetMatch.dateKey}] ${targetMatch.match}`);
     
-    const page = await setupTurboPage(browser); // 터보 모드 장착
-    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const page = await setupTurboPage(browser); 
+    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded' });
     try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) {}
     
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 6000) { clearInterval(t); r(); } }, 100); }); });
@@ -278,7 +290,7 @@ export async function runLineupScraper() {
 
     if (extractedData.players.length === 0) { console.log(`⚠️ 경기 전입니다. 라인업이 아직 발표되지 않았습니다.`); return; }
 
-    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'domcontentloaded' });
     await new Promise(r => setTimeout(r, 1500)); 
     await page.evaluate(async () => { window.scrollBy(0, 1500); await new Promise(r => setTimeout(r, 500)); window.scrollBy(0, -1500); });
 
