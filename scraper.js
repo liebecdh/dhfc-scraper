@@ -21,32 +21,44 @@ const APP_ID = 'daejeon-shift-pro-test-sandbox';
 const TARGET_YEAR = 2026; 
 
 const VENUE_MAP = {
-    '전북': '전주 월드컵', '포항': '포항 스틸야드', '강원': '강릉하이원아레나',
-    '안양': '안양 종합', '인천': '인천 전용', '서울': '서울 월드컵',
-    '광주': '광주 월드컵', '김천': '김천 종합', '울산': '울산 문수',
-    '제주': '제주 월드컵', '부천': '부천 종합', '대전': '대전 월드컵'
+  '전북': '전주 월드컵', '포항': '포항 스틸야드', '강원': '강릉하이원아레나',
+  '안양': '안양 종합', '인천': '인천 전용', '서울': '서울 월드컵',
+  '광주': '광주 월드컵', '김천': '김천 종합', '울산': '울산 문수',
+  '제주': '제주 월드컵', '부천': '부천 종합', '대전': '대전 월드컵'
 };
 
 const PLAYER_CATEGORIES = [
-    { name: '득점', key: 'goals' }, { name: '도움', key: 'assists' }, { name: '공격포인트', key: 'points' },
-    { name: 'MOM', key: 'mom' }, { name: '평균평점', key: 'rating' }, { name: 'BEST11', key: 'best11' }
+  { name: '득점', key: 'goals' }, { name: '도움', key: 'assists' }, { name: '공격포인트', key: 'points' },
+  { name: 'MOM', key: 'mom' }, { name: '평균평점', key: 'rating' }, { name: 'BEST11', key: 'best11' }
 ];
 
+// 🚨 [터보 모드 공통 함수] 불필요한 사진, 폰트, 광고를 전면 차단하여 속도 극대화
+async function setupTurboPage(browser) {
+    const page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+        if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+            req.abort(); // 사진, 광고 등은 다운로드 취소!
+        } else {
+            req.continue();
+        }
+    });
+    await page.setCacheEnabled(false);
+    await page.setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
+    await page.setViewport({ width: 412, height: 915, isMobile: true, hasTouch: true });
+    return page;
+}
+
 // ==========================================
-// 1. [일정 스크래퍼] (15시 마스터 동기화 및 라이브 추적용)
-// isFullSync가 true면 2월~12월 싹 다 긁고, false면 이번 달만 긁습니다.
+// 1. [일정 스크래퍼] 
 // ==========================================
 export async function runScheduleScraper(isFullSync = false) {
     console.log(`\n🚀 [일정] ${isFullSync ? '전체 일정 마스터 갱신' : '라이브 일정 추적'} 시작...`);
-    const browser = await puppeteer.launch({ headless: true }); // 서버용은 headless: true 권장
+    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] }); 
     const allMatches = {};
-    let globalOrderCounter = 1; 
 
     try {
-        const page = await browser.newPage();
-        await page.setCacheEnabled(false);
-        await page.setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
-        await page.setViewport({ width: 412, height: 915, isMobile: true, hasTouch: true });
+        const page = await setupTurboPage(browser); // 터보 모드 페이지 생성
 
         const startMonth = isFullSync ? 2 : new Date().getMonth() + 1;
         const endMonth = isFullSync ? 12 : new Date().getMonth() + 1;
@@ -55,7 +67,8 @@ export async function runScheduleScraper(isFullSync = false) {
             const monthStr = m.toString().padStart(2, '0');
             console.log(`🔍 ${monthStr}월 데이터 추출 중...`);
             
-            await page.goto(`https://m.sports.naver.com/kfootball/schedule/index?category=kleague&date=${TARGET_YEAR}-${monthStr}-01`, { waitUntil: 'networkidle2' });
+            // 🚨 타임아웃을 60초로 늘리고, 무거운 대기 모드(networkidle2) 해제
+            await page.goto(`https://m.sports.naver.com/kfootball/schedule/index?category=kleague&date=${TARGET_YEAR}-${monthStr}-01`, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
             await page.evaluate(async () => {
                 await new Promise((resolve) => {
@@ -65,11 +78,10 @@ export async function runScheduleScraper(isFullSync = false) {
                     }, 150);
                 });
             });
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise(r => setTimeout(r, 1000));
 
-            const monthGames = await page.evaluate((year, vMap, startIdx) => {
+            const monthGames = await page.evaluate((year, vMap) => {
                 const results = {};
-                let currentIdx = startIdx;
                 const matchItems = document.querySelectorAll('[class*="MatchBox_match_item"]');
 
                 matchItems.forEach(item => {
@@ -103,21 +115,19 @@ export async function runScheduleScraper(isFullSync = false) {
                     if (matchedHomeTeamKey) { venueText = vMap[matchedHomeTeamKey]; if (involvesDaejeon) venueText += isDaejeonHome ? "(홈)" : "(원정)"; } 
                     else { venueText = `${homeTeam} 홈구장`; }
 
-                    // 🚨 순번(orderPad)과 시간(timeStr)을 빼고, [날짜_홈팀_어웨이팀]으로만 고유 이름표 생성!
-const uniqueKey = `${cleanKey}_${homeTeam}_${awayTeam}`;
+                    // 🚨 [수정 완료] 증식 버그 방지 (순번 꼬리표 제거)
+                    const uniqueKey = `${cleanKey}_${homeTeam}_${awayTeam}`;
 
-results[uniqueKey] = { title: roundStr, opponent: involvesDaejeon ? (isDaejeonHome ? awayTeam : homeTeam) : awayTeam, match: `${homeTeam} vs ${awayTeam}`, homeTeam, awayTeam, time: timeStr, venue: venueText, type: matchType, score: scoreStr, status: appStatus, dateKey: cleanKey, naverGameId: item.querySelector('a[href*="/game/"]')?.getAttribute('href')?.match(/\d+/)?.[0] || "" };
+                    results[uniqueKey] = { title: roundStr, opponent: involvesDaejeon ? (isDaejeonHome ? awayTeam : homeTeam) : awayTeam, match: `${homeTeam} vs ${awayTeam}`, homeTeam, awayTeam, time: timeStr, venue: venueText, type: matchType, score: scoreStr, status: appStatus, dateKey: cleanKey, naverGameId: item.querySelector('a[href*="/game/"]')?.getAttribute('href')?.match(/\d+/)?.[0] || "" };
                 });
-                return { results, lastIdx: currentIdx };
-            }, TARGET_YEAR, VENUE_MAP, globalOrderCounter);
+                return results;
+            }, TARGET_YEAR, VENUE_MAP);
 
-            Object.assign(allMatches, monthGames.results);
-            globalOrderCounter = monthGames.lastIdx;
+            Object.assign(allMatches, monthGames);
         }
         
         const targetDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'userSchedules_v305', FAMILY_KEY);
         
-        // 🚨 부분 수집(라이브 모드)일 때는 기존 일정에 병합, 전수 조사일 때는 덮어쓰기
         if (isFullSync) {
             await updateDoc(targetDocRef, { "content.kLeagueFixtures": allMatches });
         } else {
@@ -131,22 +141,18 @@ results[uniqueKey] = { title: roundStr, opponent: involvesDaejeon ? (isDaejeonHo
 }
 
 // ==========================================
-// 2. [순위 스크래퍼] (팀 순위 + 선수 기록 6종)
+// 2. [순위 스크래퍼] 
 // ==========================================
 export async function runRankingsScraper() {
   console.log(`\n🚀 [순위] ${TARGET_YEAR}년 랭킹 데이터 수집 시작...`);
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
   
   try {
-    const page = await browser.newPage();
-    await page.setCacheEnabled(false);
-    await page.setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
-    await page.setViewport({ width: 412, height: 915, isMobile: true, hasTouch: true });
-
+    const page = await setupTurboPage(browser); // 터보 모드 장착
     let teamStandings = [];
     const finalPlayerRankings = {};
 
-    await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'networkidle2' });
+    await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     console.log(`🛡️ [팀 순위] 데이터 추출 중...`);
     await page.evaluate(() => { const teamBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('팀 순위')); if(teamBtn) teamBtn.click(); });
@@ -196,13 +202,12 @@ export async function runRankingsScraper() {
   finally { await browser.close(); }
 }
 
-
 // ==========================================
-// 3. [라인업 스크래퍼] (동적 타겟팅 + 무조건 대전 왼쪽 고정)
+// 3. [라인업 스크래퍼] 
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
 
   try {
     const targetDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'userSchedules_v305', FAMILY_KEY);
@@ -213,34 +218,26 @@ export async function runLineupScraper() {
     const fixtures = content.kLeagueFixtures;
     const now = new Date();
     
-    // 🚨 [수술 완료] 날짜를 '2026-5-5' 형태에서도 완벽하게 읽어내는 안전한 변환기
+    // 🚨 [수정 완료] 10월 버그 수정된 안전한 날짜 변환기 탑재
     const parseSafeDate = (dateKey, timeStr = '00:00') => {
         const [y, m, d] = dateKey.split('-').map(Number);
         const [hh, mm] = (timeStr === '미정' ? '00:00' : timeStr).split(':').map(Number);
         return new Date(y, m - 1, d, hh, mm);
     };
 
-    // 🚨 안전한 변환기를 사용해 경기 일정 정렬
+    let targetMatch = null;
     const sortedFixtures = Object.values(fixtures).sort((a, b) => parseSafeDate(a.dateKey, a.time) - parseSafeDate(b.dateKey, b.time));
 
-    let targetMatch = null;
     for (const match of sortedFixtures) {
-        const matchDate = parseSafeDate(match.dateKey, "23:59"); // 그날 밤 11시 59분 기준
-        if ((match.homeTeam.includes('대전') || match.awayTeam.includes('대전')) && matchDate >= now) { 
-            targetMatch = match; 
-            break; 
-        }
+        const matchDate = parseSafeDate(match.dateKey, "23:59"); 
+        if ((match.homeTeam.includes('대전') || match.awayTeam.includes('대전')) && matchDate >= now) { targetMatch = match; break; }
     }
 
     if (!targetMatch || !targetMatch.naverGameId) { console.log(`⚠️ 수집 가능한 대전 경기를 찾을 수 없습니다.`); return; }
     console.log(`🎯 타겟팅 성공: [${targetMatch.dateKey}] ${targetMatch.match}`);
     
-    const page = await browser.newPage();
-    await page.setCacheEnabled(false);
-    await page.setUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36');
-    await page.setViewport({ width: 412, height: 915, isMobile: true, hasTouch: true });
-
-    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'networkidle2' });
+    const page = await setupTurboPage(browser); // 터보 모드 장착
+    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) {}
     
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 6000) { clearInterval(t); r(); } }, 100); }); });
@@ -281,7 +278,7 @@ export async function runLineupScraper() {
 
     if (extractedData.players.length === 0) { console.log(`⚠️ 경기 전입니다. 라인업이 아직 발표되지 않았습니다.`); return; }
 
-    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'networkidle2' });
+    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await new Promise(r => setTimeout(r, 1500)); 
     await page.evaluate(async () => { window.scrollBy(0, 1500); await new Promise(r => setTimeout(r, 500)); window.scrollBy(0, -1500); });
 
