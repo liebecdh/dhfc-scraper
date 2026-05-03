@@ -103,10 +103,10 @@ export async function runScheduleScraper(isFullSync = false) {
                     if (matchedHomeTeamKey) { venueText = vMap[matchedHomeTeamKey]; if (involvesDaejeon) venueText += isDaejeonHome ? "(홈)" : "(원정)"; } 
                     else { venueText = `${homeTeam} 홈구장`; }
 
-                    const orderPad = String(currentIdx++).padStart(4, '0');
-                    const uniqueKey = `${cleanKey}_${timeStr}_${orderPad}_${homeTeam}_${awayTeam}`;
+                    // 🚨 순번(orderPad)과 시간(timeStr)을 빼고, [날짜_홈팀_어웨이팀]으로만 고유 이름표 생성!
+const uniqueKey = `${cleanKey}_${homeTeam}_${awayTeam}`;
 
-                    results[uniqueKey] = { title: roundStr, opponent: involvesDaejeon ? (isDaejeonHome ? awayTeam : homeTeam) : awayTeam, match: `${homeTeam} vs ${awayTeam}`, homeTeam, awayTeam, time: timeStr, venue: venueText, type: matchType, score: scoreStr, status: appStatus, dateKey: cleanKey, naverGameId: item.querySelector('a[href*="/game/"]')?.getAttribute('href')?.match(/\d+/)?.[0] || "" };
+results[uniqueKey] = { title: roundStr, opponent: involvesDaejeon ? (isDaejeonHome ? awayTeam : homeTeam) : awayTeam, match: `${homeTeam} vs ${awayTeam}`, homeTeam, awayTeam, time: timeStr, venue: venueText, type: matchType, score: scoreStr, status: appStatus, dateKey: cleanKey, naverGameId: item.querySelector('a[href*="/game/"]')?.getAttribute('href')?.match(/\d+/)?.[0] || "" };
                 });
                 return { results, lastIdx: currentIdx };
             }, TARGET_YEAR, VENUE_MAP, globalOrderCounter);
