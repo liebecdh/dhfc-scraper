@@ -267,11 +267,18 @@ cron.schedule('* * * * *', async () => {
 app.get('/', (req, res) => res.send('⚽ DHFC Scraper Control Tower Active'));
 
 app.get('/test', async (req, res) => {
-  res.send('⚽ 기존 중복 일정을 싹 밀어버리고, 새 일정으로 강제 동기화합니다!');
+  res.send('⚽ [가벼운 청소] 기존 중복 일정을 깨끗하게 비웠습니다! 이제 1~2분 뒤 자동으로 새 일정이 채워집니다.');
   
-  // 🚨 true를 넣으면 기존 DB의 kLeagueFixtures를 통째로 초기화하고 덮어씁니다!
-  await safeExecute('[수동 찌꺼기 청소] 전체 일정 마스터 덮어쓰기', async () => {
-    await runScheduleScraper(true); 
+  await safeExecute('[가벼운 찌꺼기 청소]', async () => {
+    const targetDocRef = doc(db, 'artifacts', 'daejeon-shift-pro-test-sandbox', 'public', 'data', 'userSchedules_v305', '조아');
+    // 빈 깡통으로 덮어써서 찌꺼기 완벽 삭제
+    await updateDoc(targetDocRef, { "content.kLeagueFixtures": {} });
+    console.log("🧹 [찌꺼기 청소 완료] 기존 일정을 싹 비웠습니다. 이제 다시 스크래핑을 시작합니다.");
+    
+    // 청소 후 3초 쉬었다가 다시 채워넣기 시작!
+    setTimeout(() => {
+        runScheduleScraper(true);
+    }, 3000);
   });
 });
 
