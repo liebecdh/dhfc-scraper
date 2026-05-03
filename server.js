@@ -253,15 +253,13 @@ cron.schedule('* * * * *', async () => {
 
 app.get('/', (req, res) => res.send('⚽ DHFC Scraper Control Tower Active'));
 
-// 🚨 [추가 완료] 수동 스크래퍼 강제 작동 버튼 (주소창에 /test 입력 시 작동)
 app.get('/test', async (req, res) => {
-  res.send('⚽ 강제 스크래핑을 시작합니다. Render의 Logs 창을 확인하세요!');
+  res.send('⚽ 기존 중복 일정을 싹 밀어버리고, 새 일정으로 강제 동기화합니다!');
   
-  // 1. 달력 최신화
-  await updateTodayMatchMemory(); 
-  
-  // 2. 라인업 스크래퍼 강제 출동!
-  await safeExecute('[수동 테스트] 라인업 핀셋 타격', runLineupScraper);
+  // 🚨 true를 넣으면 기존 DB의 kLeagueFixtures를 통째로 초기화하고 덮어씁니다!
+  await safeExecute('[수동 찌꺼기 청소] 전체 일정 마스터 덮어쓰기', async () => {
+    await runScheduleScraper(true); 
+  });
 });
 
 app.listen(PORT, async () => {
