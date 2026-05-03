@@ -32,18 +32,16 @@ const PLAYER_CATEGORIES = [
   { name: 'MOM', key: 'mom' }, { name: '평균평점', key: 'rating' }, { name: 'BEST11', key: 'best11' }
 ];
 
-// 🚨 [터보 모드 + 메모리 최적화]
+// 🚨 [수정 완료] 통신 차단 옵션 조정 (네이버 데이터 수신 방해 금지)
 async function setupTurboPage(browser) {
     const page = await browser.newPage();
-    
-    // 1. 30초 제한 해제 (느려도 끝까지 기다림)
     page.setDefaultNavigationTimeout(0);
     page.setDefaultTimeout(0);
 
-    // 2. 사진/광고 전면 차단
     await page.setRequestInterception(true);
     page.on('request', (req) => {
-        if (['image', 'stylesheet', 'font', 'media', 'other'].includes(req.resourceType())) {
+        // 🚨 'other'를 차단 해제하여 네이버의 숨겨진 데이터 통신이 끊기지 않도록 수정
+        if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
             req.abort(); 
         } else {
             req.continue();
@@ -55,7 +53,6 @@ async function setupTurboPage(browser) {
     return page;
 }
 
-// 🚨 클라우드 전용 크롬 실행 옵션
 const CHROME_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process'];
 
 // ==========================================
@@ -74,11 +71,20 @@ export async function runScheduleScraper(isFullSync = false) {
             const monthStr = m.toString().padStart(2, '0');
             console.log(`🔍 ${monthStr}월 데이터 추출 중...`);
             
-            // 🚨 [핵심] 매달 새로운 탭을 열어서 작업
             const page = await setupTurboPage(browser); 
             
             try {
                 await page.goto(`https://m.sports.naver.com/kfootball/schedule/index?category=kleague&date=${TARGET_YEAR}-${monthStr}-01`, { waitUntil: 'domcontentloaded' });
+
+                // 🚨 [핵심 처방 1] 네이버가 알맹이(데이터)를 화면에 띄울 때까지 3.5초 강제 대기!
+                await new Promise(r => setTimeout(r, 3500));
+
+                // 🚨 [핵심 처방 2] 경기 리스트가 화면에 그려졌는지 한 번 더 꼼꼼히 확인
+                try {
+                    await page.waitForSelector('[class*="MatchBox_match_item"]', { timeout: 3000 });
+                } catch (e) {
+                    console.log(`⚠️ ${monthStr}월은 아직 일정이 없거나 비어있습니다.`);
+                }
 
                 await page.evaluate(async () => {
                     await new Promise((resolve) => {
@@ -134,7 +140,6 @@ export async function runScheduleScraper(isFullSync = false) {
 
                 Object.assign(allMatches, monthGames);
             } finally {
-                // 🚨 [핵심] 한 달 스크랩이 끝나면 즉시 탭을 닫아 메모리 비우기!
                 await page.close(); 
             }
         }
@@ -166,6 +171,9 @@ export async function runRankingsScraper() {
     const finalPlayerRankings = {};
 
     await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded' });
+    
+    // 🚨 여기서도 3.5초 대기
+    await new Promise(r => setTimeout(r, 3500));
 
     console.log(`🛡️ [팀 순위] 데이터 추출 중...`);
     await page.evaluate(() => { const teamBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('팀 순위')); if(teamBtn) teamBtn.click(); });
@@ -250,7 +258,10 @@ export async function runLineupScraper() {
     
     const page = await setupTurboPage(browser); 
     await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded' });
-    try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) {}
+    
+    // 🚨 라인업 페이지도 3.5초 대기
+    await new Promise(r => setTimeout(r, 3500));
+    try { await page.waitForSelector('[class*="name" i]', { timeout: 5000 }); } catch (e) {}
     
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 6000) { clearInterval(t); r(); } }, 100); }); });
     await new Promise(r => setTimeout(r, 1000));
@@ -291,7 +302,7 @@ export async function runLineupScraper() {
     if (extractedData.players.length === 0) { console.log(`⚠️ 경기 전입니다. 라인업이 아직 발표되지 않았습니다.`); return; }
 
     await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'domcontentloaded' });
-    await new Promise(r => setTimeout(r, 1500)); 
+    await new Promise(r => setTimeout(r, 3500)); 
     await page.evaluate(async () => { window.scrollBy(0, 1500); await new Promise(r => setTimeout(r, 500)); window.scrollBy(0, -1500); });
 
     const recordData = await page.evaluate(() => {
