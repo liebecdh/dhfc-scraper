@@ -213,12 +213,23 @@ export async function runLineupScraper() {
     const fixtures = content.kLeagueFixtures;
     const now = new Date();
     
-    let targetMatch = null;
-    const sortedFixtures = Object.values(fixtures).sort((a, b) => new Date(`${a.dateKey}T${a.time === '미정' ? '00:00' : a.time}`) - new Date(`${b.dateKey}T${b.time === '미정' ? '00:00' : b.time}`));
+    // 🚨 [수술 완료] 날짜를 '2026-5-5' 형태에서도 완벽하게 읽어내는 안전한 변환기
+    const parseSafeDate = (dateKey, timeStr = '00:00') => {
+        const [y, m, d] = dateKey.split('-').map(Number);
+        const [hh, mm] = (timeStr === '미정' ? '00:00' : timeStr).split(':').map(Number);
+        return new Date(y, m - 1, d, hh, mm);
+    };
 
+    // 🚨 안전한 변환기를 사용해 경기 일정 정렬
+    const sortedFixtures = Object.values(fixtures).sort((a, b) => parseSafeDate(a.dateKey, a.time) - parseSafeDate(b.dateKey, b.time));
+
+    let targetMatch = null;
     for (const match of sortedFixtures) {
-        const matchDate = new Date(`${match.dateKey}T23:59:59`); 
-        if ((match.homeTeam.includes('대전') || match.awayTeam.includes('대전')) && matchDate >= now) { targetMatch = match; break; }
+        const matchDate = parseSafeDate(match.dateKey, "23:59"); // 그날 밤 11시 59분 기준
+        if ((match.homeTeam.includes('대전') || match.awayTeam.includes('대전')) && matchDate >= now) { 
+            targetMatch = match; 
+            break; 
+        }
     }
 
     if (!targetMatch || !targetMatch.naverGameId) { console.log(`⚠️ 수집 가능한 대전 경기를 찾을 수 없습니다.`); return; }
