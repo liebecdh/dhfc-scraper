@@ -253,6 +253,17 @@ cron.schedule('* * * * *', async () => {
 
 app.get('/', (req, res) => res.send('⚽ DHFC Scraper Control Tower Active'));
 
+// 🚨 [추가 완료] 수동 스크래퍼 강제 작동 버튼 (주소창에 /test 입력 시 작동)
+app.get('/test', async (req, res) => {
+  res.send('⚽ 강제 스크래핑을 시작합니다. Render의 Logs 창을 확인하세요!');
+  
+  // 1. 달력 최신화
+  await updateTodayMatchMemory(); 
+  
+  // 2. 라인업 스크래퍼 강제 출동!
+  await safeExecute('[수동 테스트] 라인업 핀셋 타격', runLineupScraper);
+});
+
 app.listen(PORT, async () => {
   console.log(`🚀 관제 서버가 포트 ${PORT}에서 시작되었습니다.`);
   await updateTodayMatchMemory(); 
