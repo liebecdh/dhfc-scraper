@@ -37,9 +37,10 @@ let isScraping = false;
 let todayMatchInfo = null; 
 let lastNotifiedMsgId = null;
 let lastNotifiedLineupDate = null; // 👈 라인업 푸시 중복 방지용 메모리
+let isKLeagueMatchDay = false; // 🚨 [추가] 오늘 K리그 경기가 있는가?
 
 // ==========================================
-// 🚨 [추가 완료] 실시간 라인업 감시 및 푸시 알림 엔진
+// 🚨 실시간 라인업 감시 및 푸시 알림 엔진
 // ==========================================
 function startLineupObserver() {
   if (!admin.apps.length) return;
@@ -169,6 +170,7 @@ async function safeExecute(taskName, taskFn) {
   }
 }
 
+// 🚨 [수정 완료] K리그 경기 여부 판단 로직 추가
 async function updateTodayMatchMemory() {
   const targetDocRef = doc(db, 'artifacts', 'daejeon-shift-pro-test-sandbox', 'public', 'data', 'userSchedules_v305', '조아');
   const snap = await getDoc(targetDocRef);
@@ -177,20 +179,28 @@ async function updateTodayMatchMemory() {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
     
+    // 1. 대전 경기 확인
     todayMatchInfo = Object.values(fixtures).find(m => 
       m.dateKey === todayStr && (m.homeTeam.includes('대전') || m.awayTeam.includes('대전'))
     );
-    
     if (todayMatchInfo) {
       console.log(`📅 [메모리] 오늘 대전 경기 감지: ${todayMatchInfo.match} (${todayMatchInfo.time})`);
     } else {
       console.log(`📅 [메모리] 오늘 대전 경기가 없습니다.`);
     }
+
+    // 2. K리그 전체 경기 확인
+    isKLeagueMatchDay = Object.values(fixtures).some(m => m.dateKey === todayStr);
+    if (isKLeagueMatchDay) {
+      console.log(`🏟️ [메모리] 오늘 K리그1 경기가 있습니다. (실시간 스코어 추적 활성화)`);
+    } else {
+      console.log(`🏟️ [메모리] 오늘 K리그1 경기가 없습니다. (실시간 스코어 추적 휴식)`);
+    }
   }
 }
 
 // ==========================================
-// 🚨 [추가 완료] 자정(00:00) 라인업 초기화 스케줄러
+// 🚨 자정(00:00) 라인업 초기화 스케줄러
 // ==========================================
 cron.schedule('0 0 * * *', async () => {
   await safeExecute('자정 경기 감지 및 라인업 초기화', async () => {
@@ -223,7 +233,10 @@ cron.schedule('1 15 * * *', async () => {
   });
 }, { timezone: "Asia/Seoul" });
 
+// 🚨 [수정 완료] 경기 없는 날은 추적 안 함!
 cron.schedule('*/3 14-22 * * *', async () => {
+  if (!isKLeagueMatchDay) return; // 👈 K리그 경기가 없으면 여기서 컷!
+
   await safeExecute('라이브 스코어/순위 실시간 추적', async () => {
     await runScheduleScraper(false); 
     await runRankingsScraper();      
