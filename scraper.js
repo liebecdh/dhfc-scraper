@@ -95,8 +95,12 @@ export async function runScheduleScraper(isFullSync = false) {
                         const timeStr = timeMatch ? timeMatch[0] : "미정";
 
                         let rawStatus = item.querySelector('[class*="MatchBox_status"]')?.innerText.trim() || "경기전";
-                        let appStatus = rawStatus.includes("종료") ? "경기종료" : (rawStatus === "예정" ? "경기전" : rawStatus);
-
+                        // 🚨 [수술 완료] "전반종료"는 그대로 냅두고, 그 외의 "종료"만 "경기종료"로 처리!
+                        let appStatus = rawStatus;
+                        if (rawStatus === "예정") appStatus = "경기전";
+                        else if (rawStatus === "전반종료") appStatus = "전반종료";
+                        else if (rawStatus.includes("종료")) appStatus = "경기종료";
+                      
                         const teamEls = item.querySelectorAll('[class*="MatchBoxHeadToHeadArea_team__"]');
                         if (teamEls.length < 2) return;
                         const homeTeam = teamEls[0].innerText.trim();
