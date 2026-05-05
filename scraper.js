@@ -217,7 +217,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] - 🚨 [수술 완료] 무차별 텍스트 스캐너 장착
+// 3. [라인업 스크래퍼] - 🚨 기존의 완벽했던 태그 기반 스크래퍼로 롤백 완료
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
@@ -252,58 +252,37 @@ export async function runLineupScraper() {
     const page = await setupTurboPage(browser); 
     await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded' });
     
-    // 🚨 특정 클래스를 기다리지 않고 4.5초 고정 대기 (네이버의 태그 변경에 완벽 면역)
+    // 🚨 넉넉한 고정 대기시간 확보 (네이버 로딩 딜레이 완벽 방어)
     await new Promise(r => setTimeout(r, 4500));
+    try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) { console.log("이름 태그 대기 타임아웃 (무시하고 진행)"); }
     
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 6000) { clearInterval(t); r(); } }, 100); }); });
     await new Promise(r => setTimeout(r, 1000));
 
-    // 🚨 초강력 스캐너: 화면의 모든 div/li 중 "숫자 + 이름" 패턴을 강제로 뜯어냄
     const extractedData = await page.evaluate(() => {
         const playersMap = new Map(); 
         const exactBlocked = ['감독', '코치', '승', '무', '패', '기록', '상세', '보기', '교체', '투입', '아웃', '홈', '원정'];
         const teamNames = ['서울', '대전', '울산', '포항', '김천', '제주', '전북', '광주', '강원', '인천', '대구', '수원', '안양', '부천'];
-        const posList = ['GK','DF','MF','FW','ST','CB','LB','RB','LWB','RWB','CDM','CM','CAM','LM','RM','CF','SUB'];
 
-        const nodes = document.querySelectorAll('li, div');
+        document.querySelectorAll('[class*="player_item" i], [class*="Formation_player" i], [class*="player_card" i]').forEach((wrap) => {
+            const nameEl = wrap.querySelector('[class*="name" i]');
+            if (!nameEl) return;
+            const mainNameText = nameEl.innerText.replace(/[0-9'’′]/g, '').split('\n')[0].trim();
+            if (!mainNameText || mainNameText.length > 7 || exactBlocked.includes(mainNameText) || teamNames.includes(mainNameText)) return; 
 
-        nodes.forEach((wrap) => {
-            const text = wrap.innerText?.trim() || '';
-            // 내용이 너무 길면 선수 카드가 아님
-            if (!text || text.length > 45) return;
+            const no = parseInt(wrap.querySelector('[class*="number" i], [class*="num" i]')?.innerText.trim() || '0', 10);
+            if (no === 0) return;
 
-            // 정규식: "숫자"로 시작하고 그 뒤에 글자가 오는지 확인 (예: "1 이창근" 또는 "20\nMF\n이현식")
-            const numMatch = text.match(/^(\d+)\s*\n*(.+)/);
-            if (!numMatch) return;
-
-            const no = parseInt(numMatch[1], 10);
-            if (no === 0 || isNaN(no)) return;
-
-            // 줄바꿈으로 쪼개서 이름과 포지션 구분
-            let lines = numMatch[2].split('\n').map(l => l.replace(/[0-9'’′]/g, '').trim()).filter(l => l);
-            // 이름 찾기 (포지션 영문자나 팀명, 차단 단어가 아닌 첫 번째 줄)
-            let rawName = lines.find(l => !posList.includes(l.toUpperCase()) && !teamNames.includes(l) && !exactBlocked.includes(l));
-
-            if (!rawName || rawName.length > 7) return; 
-
-            const uniqueKey = `${no}_${rawName}`;
-            let existing = playersMap.get(uniqueKey) || { 
-                no, name: rawName, 
-                pos: lines.find(l => posList.includes(l.toUpperCase())) || wrap.querySelector('[class*="pos" i]')?.innerText.trim() || '', 
-                photo: null, rating: '-', goals: 0, ownGoals: 0, subTime: null, 
-                subOutFlag: false, replacedName: null, 
-                yellowCard: wrap.innerHTML.includes('경고'), 
-                redCard: wrap.innerHTML.includes('퇴장'), 
-                rectLeft: wrap.getBoundingClientRect().left 
-            };
+            const uniqueKey = `${no}_${mainNameText}`;
+            let existing = playersMap.get(uniqueKey) || { no, name: mainNameText, pos: wrap.querySelector('[class*="pos" i]')?.innerText.trim() || '', photo: null, rating: '-', goals: 0, ownGoals: 0, subTime: null, subOutFlag: false, replacedName: null, yellowCard: wrap.innerHTML.includes('경고'), redCard: wrap.innerHTML.includes('퇴장'), rectLeft: wrap.getBoundingClientRect().left };
 
             if (!existing.photo) {
                 const urls = wrap.innerHTML.match(/(?:https?:)?\/\/[^"'\s>)]+/g) || [];
-                for (let u of urls) { if (u.includes('pstatic.net') && u.match(/\.(jpg|jpeg|png|webp)/i) && !u.match(/(1x1|badge|logo|emblem|svg|icon)/i)) { existing.photo = u.startsWith('//') ? 'https:' + u : u; break; } }
+                for (let u of urls) { if (u.includes('pstatic.net') && u.match(/\.(jpg|jpeg|png|webp)/i) && !u.match(/(1x1|badge|logo|emblem|svg)/i)) { existing.photo = u.startsWith('//') ? 'https:' + u : u; break; } }
             }
-            if (wrap.innerHTML.includes('교체') || text.includes('교체')) {
-                const timeMatch = text.match(/(\d+)\s*['’′]/) || wrap.innerText.match(/(\d+)\s*['’′]/);
-                if (timeMatch) { existing.subTime = timeMatch[1]; existing.replacedName = wrap.querySelector('[class*="substitute" i], [class*="sub_" i]')?.innerText.replace(/[0-9'’′]/g, '').trim() || null; } 
+            if (wrap.innerHTML.includes('교체')) {
+                const timeMatch = wrap.innerText.match(/(\d+)\s*['’′]/);
+                if (timeMatch) { existing.subTime = timeMatch[1]; existing.replacedName = wrap.querySelector('[class*="substitute_player" i] [class*="name" i]')?.innerText.replace(/[0-9'’′]/g, '').trim() || null; } 
                 else { existing.subOutFlag = true; }
             }
             playersMap.set(uniqueKey, existing);
