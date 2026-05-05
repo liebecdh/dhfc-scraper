@@ -299,7 +299,7 @@ cron.schedule('* * * * *', async () => {
   }
 
   // 🚨 [수술 완료] 밤 11시부터 11시 30분까지 3분 간격으로 평점/득점 완벽 최종 마감
-  if (now.getHours() === 23 && now.getMinutes() <= 30 && now.getMinutes() % 3 === 0) {
+  if (now.getHours() === 23 && now.getMinutes() <= 55 && now.getMinutes() % 3 === 0) {
     await safeExecute('밤 11시 평점/기록 최종 마감 스위핑', runLineupScraper);
   }
 }, { timezone: "Asia/Seoul" });
