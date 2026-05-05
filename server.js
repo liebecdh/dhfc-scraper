@@ -267,7 +267,7 @@ cron.schedule('* * * * *', async () => {
     await safeExecute('라인업 1분 단위 핀셋 타격', runLineupScraper);
   }
 
-  if (diff <= -180 && diff >= -210 && now.getMinutes() % 1 === 0) {
+  if (diff <= -120 && diff >= -130 && now.getMinutes() % 1 === 0) {
     await safeExecute('경기 종료 후 기록 스위핑', runLineupScraper);
   }
 
