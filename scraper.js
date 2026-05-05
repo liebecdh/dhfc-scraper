@@ -32,7 +32,6 @@ const PLAYER_CATEGORIES = [
   { name: 'MOM', key: 'mom' }, { name: '평균평점', key: 'rating' }, { name: 'BEST11', key: 'best11' }
 ];
 
-// 🚨 [수정 완료] 통신 차단 옵션 조정 (네이버 데이터 수신 방해 금지)
 async function setupTurboPage(browser) {
     const page = await browser.newPage();
     page.setDefaultNavigationTimeout(0);
@@ -40,7 +39,6 @@ async function setupTurboPage(browser) {
 
     await page.setRequestInterception(true);
     page.on('request', (req) => {
-        // 🚨 'other'를 차단 해제하여 네이버의 숨겨진 데이터 통신이 끊기지 않도록 수정
         if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
             req.abort(); 
         } else {
@@ -75,11 +73,8 @@ export async function runScheduleScraper(isFullSync = false) {
             
             try {
                 await page.goto(`https://m.sports.naver.com/kfootball/schedule/index?category=kleague&date=${TARGET_YEAR}-${monthStr}-01`, { waitUntil: 'domcontentloaded' });
-
-                // 🚨 [핵심 처방 1] 네이버가 알맹이(데이터)를 화면에 띄울 때까지 3.5초 강제 대기!
                 await new Promise(r => setTimeout(r, 3500));
 
-                // 🚨 [핵심 처방 2] 경기 리스트가 화면에 그려졌는지 한 번 더 꼼꼼히 확인
                 try {
                     await page.waitForSelector('[class*="MatchBox_match_item"]', { timeout: 3000 });
                 } catch (e) {
@@ -171,8 +166,6 @@ export async function runRankingsScraper() {
     const finalPlayerRankings = {};
 
     await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded' });
-    
-    // 🚨 여기서도 3.5초 대기
     await new Promise(r => setTimeout(r, 3500));
 
     console.log(`🛡️ [팀 순위] 데이터 추출 중...`);
@@ -224,7 +217,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] 
+// 3. [라인업 스크래퍼] - 🚨 [수술 완료] 무차별 텍스트 스캐너 장착
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
@@ -259,37 +252,58 @@ export async function runLineupScraper() {
     const page = await setupTurboPage(browser); 
     await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded' });
     
-    // 🚨 라인업 페이지도 3.5초 대기
-    await new Promise(r => setTimeout(r, 3500));
-    try { await page.waitForSelector('[class*="name" i]', { timeout: 5000 }); } catch (e) {}
+    // 🚨 특정 클래스를 기다리지 않고 4.5초 고정 대기 (네이버의 태그 변경에 완벽 면역)
+    await new Promise(r => setTimeout(r, 4500));
     
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 6000) { clearInterval(t); r(); } }, 100); }); });
     await new Promise(r => setTimeout(r, 1000));
 
+    // 🚨 초강력 스캐너: 화면의 모든 div/li 중 "숫자 + 이름" 패턴을 강제로 뜯어냄
     const extractedData = await page.evaluate(() => {
         const playersMap = new Map(); 
-        const exactBlocked = ['감독', '코치', '승', '무', '패', '기록', '상세', '보기', '교체', '투입', '아웃'];
+        const exactBlocked = ['감독', '코치', '승', '무', '패', '기록', '상세', '보기', '교체', '투입', '아웃', '홈', '원정'];
         const teamNames = ['서울', '대전', '울산', '포항', '김천', '제주', '전북', '광주', '강원', '인천', '대구', '수원', '안양', '부천'];
+        const posList = ['GK','DF','MF','FW','ST','CB','LB','RB','LWB','RWB','CDM','CM','CAM','LM','RM','CF','SUB'];
 
-        document.querySelectorAll('[class*="player_item" i], [class*="Formation_player" i], [class*="player_card" i]').forEach((wrap) => {
-            const nameEl = wrap.querySelector('[class*="name" i]');
-            if (!nameEl) return;
-            const mainNameText = nameEl.innerText.replace(/[0-9'’′]/g, '').split('\n')[0].trim();
-            if (!mainNameText || mainNameText.length > 7 || exactBlocked.includes(mainNameText) || teamNames.includes(mainNameText)) return; 
+        const nodes = document.querySelectorAll('li, div');
 
-            const no = parseInt(wrap.querySelector('[class*="number" i], [class*="num" i]')?.innerText.trim() || '0', 10);
-            if (no === 0) return;
+        nodes.forEach((wrap) => {
+            const text = wrap.innerText?.trim() || '';
+            // 내용이 너무 길면 선수 카드가 아님
+            if (!text || text.length > 45) return;
 
-            const uniqueKey = `${no}_${mainNameText}`;
-            let existing = playersMap.get(uniqueKey) || { no, name: mainNameText, pos: wrap.querySelector('[class*="pos" i]')?.innerText.trim() || '', photo: null, rating: '-', goals: 0, ownGoals: 0, subTime: null, subOutFlag: false, replacedName: null, yellowCard: wrap.innerHTML.includes('경고'), redCard: wrap.innerHTML.includes('퇴장'), rectLeft: wrap.getBoundingClientRect().left };
+            // 정규식: "숫자"로 시작하고 그 뒤에 글자가 오는지 확인 (예: "1 이창근" 또는 "20\nMF\n이현식")
+            const numMatch = text.match(/^(\d+)\s*\n*(.+)/);
+            if (!numMatch) return;
+
+            const no = parseInt(numMatch[1], 10);
+            if (no === 0 || isNaN(no)) return;
+
+            // 줄바꿈으로 쪼개서 이름과 포지션 구분
+            let lines = numMatch[2].split('\n').map(l => l.replace(/[0-9'’′]/g, '').trim()).filter(l => l);
+            // 이름 찾기 (포지션 영문자나 팀명, 차단 단어가 아닌 첫 번째 줄)
+            let rawName = lines.find(l => !posList.includes(l.toUpperCase()) && !teamNames.includes(l) && !exactBlocked.includes(l));
+
+            if (!rawName || rawName.length > 7) return; 
+
+            const uniqueKey = `${no}_${rawName}`;
+            let existing = playersMap.get(uniqueKey) || { 
+                no, name: rawName, 
+                pos: lines.find(l => posList.includes(l.toUpperCase())) || wrap.querySelector('[class*="pos" i]')?.innerText.trim() || '', 
+                photo: null, rating: '-', goals: 0, ownGoals: 0, subTime: null, 
+                subOutFlag: false, replacedName: null, 
+                yellowCard: wrap.innerHTML.includes('경고'), 
+                redCard: wrap.innerHTML.includes('퇴장'), 
+                rectLeft: wrap.getBoundingClientRect().left 
+            };
 
             if (!existing.photo) {
                 const urls = wrap.innerHTML.match(/(?:https?:)?\/\/[^"'\s>)]+/g) || [];
-                for (let u of urls) { if (u.includes('pstatic.net') && u.match(/\.(jpg|jpeg|png|webp)/i) && !u.match(/(1x1|badge|logo|emblem|svg)/i)) { existing.photo = u.startsWith('//') ? 'https:' + u : u; break; } }
+                for (let u of urls) { if (u.includes('pstatic.net') && u.match(/\.(jpg|jpeg|png|webp)/i) && !u.match(/(1x1|badge|logo|emblem|svg|icon)/i)) { existing.photo = u.startsWith('//') ? 'https:' + u : u; break; } }
             }
-            if (wrap.innerHTML.includes('교체')) {
-                const timeMatch = wrap.innerText.match(/(\d+)\s*['’′]/);
-                if (timeMatch) { existing.subTime = timeMatch[1]; existing.replacedName = wrap.querySelector('[class*="substitute_player" i] [class*="name" i]')?.innerText.replace(/[0-9'’′]/g, '').trim() || null; } 
+            if (wrap.innerHTML.includes('교체') || text.includes('교체')) {
+                const timeMatch = text.match(/(\d+)\s*['’′]/) || wrap.innerText.match(/(\d+)\s*['’′]/);
+                if (timeMatch) { existing.subTime = timeMatch[1]; existing.replacedName = wrap.querySelector('[class*="substitute" i], [class*="sub_" i]')?.innerText.replace(/[0-9'’′]/g, '').trim() || null; } 
                 else { existing.subOutFlag = true; }
             }
             playersMap.set(uniqueKey, existing);
@@ -337,6 +351,7 @@ export async function runLineupScraper() {
     const hBench = allPlayers.slice(22).filter(p => p.rectLeft < 206); const aBench = allPlayers.slice(22).filter(p => p.rectLeft >= 206);
 
     const merge = (p) => {
+        if (!p || !p.name) return p || { name: '' };
         const clean = p.name.replace(/\s+/g, '');
         p.rating = recordData.ratings[Object.keys(recordData.ratings).find(k => k.replace(/\s+/g, '') === clean)] || '-';
         p.goals = recordData.goals[Object.keys(recordData.goals).find(k => k.replace(/\s+/g, '') === clean)] || 0;
@@ -345,8 +360,8 @@ export async function runLineupScraper() {
     };
 
     const isDaejeonHome = targetMatch.homeTeam.includes('대전');
-    const homeFinal = { formation: extractedData.homeForm, forwards: hStarters.slice(1).reverse().map(p => ({...merge(p), subOut: p.subOutFlag || null})), goalkeeper: merge(hStarters[0]), bench: hBench.map(p => ({...merge(p), subIn: p.subTime || null})) };
-    const awayFinal = { formation: extractedData.awayForm, forwards: (aStarters.length === 11 ? aStarters.slice(0, 10) : aStarters.filter(p => !(p.pos||'').toUpperCase().includes('G'))).map(p => ({...merge(p), subOut: p.subOutFlag || null})), goalkeeper: merge(aStarters.find(p => (p.pos||'').toUpperCase().includes('G')) || aStarters[aStarters.length-1]), bench: aBench.map(p => ({...merge(p), subIn: p.subTime || null})) };
+    const homeFinal = { formation: extractedData.homeForm, forwards: hStarters.slice(1).reverse().map(p => ({...merge(p), subOut: p.subOutFlag || null})), goalkeeper: merge(hStarters[0] || {name:''}), bench: hBench.map(p => ({...merge(p), subIn: p.subTime || null})) };
+    const awayFinal = { formation: extractedData.awayForm, forwards: (aStarters.length === 11 ? aStarters.slice(0, 10) : aStarters.filter(p => !(p.pos||'').toUpperCase().includes('G'))).map(p => ({...merge(p), subOut: p.subOutFlag || null})), goalkeeper: merge(aStarters.find(p => (p.pos||'').toUpperCase().includes('G')) || aStarters[aStarters.length-1] || {name:''}), bench: aBench.map(p => ({...merge(p), subIn: p.subTime || null})) };
 
     const finalLineup = {
         matchInfo: { opponent: isDaejeonHome ? targetMatch.awayTeam : targetMatch.homeTeam, date: targetMatch.dateKey },
@@ -354,7 +369,7 @@ export async function runLineupScraper() {
         OPPONENT: isDaejeonHome ? awayFinal : homeFinal, OPPONENT_BENCH: isDaejeonHome ? awayFinal.bench : homeFinal.bench
     };
     
-    if (finalLineup.DAEJEON.goalkeeper.name) {
+    if (finalLineup.DAEJEON.goalkeeper?.name) {
         await updateDoc(targetDocRef, { "content.lineupData": finalLineup });
         console.log(`🎉 [라인업] ${targetMatch.match} DB 저장 완료!`);
     }
