@@ -32,27 +32,19 @@ const PLAYER_CATEGORIES = [
   { name: 'MOM', key: 'mom' }, { name: '평균평점', key: 'rating' }, { name: 'BEST11', key: 'best11' }
 ];
 
-// 일정/순위 스크래핑용 고속 페이지 세팅 (라인업에는 사용하지 않음)
+const CHROME_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process'];
+
 async function setupTurboPage(browser) {
     const page = await browser.newPage();
-    page.setDefaultNavigationTimeout(0);
-    page.setDefaultTimeout(0);
+    // 🚨 렌더 서버 환경에 맞춰 타임아웃 제한을 해제/연장합니다.
+    page.setDefaultNavigationTimeout(60000); 
+    page.setDefaultTimeout(60000);
 
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-        if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
-            req.abort(); 
-        } else {
-            req.continue();
-        }
-    });
     await page.setCacheEnabled(false);
     await page.setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36');
     await page.setViewport({ width: 412, height: 915, isMobile: true, hasTouch: true });
     return page;
 }
-
-const CHROME_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process'];
 
 // ==========================================
 // 1. [일정 스크래퍼] 
@@ -73,14 +65,10 @@ export async function runScheduleScraper(isFullSync = false) {
             const page = await setupTurboPage(browser); 
             
             try {
-                await page.goto(`https://m.sports.naver.com/kfootball/schedule/index?category=kleague&date=${TARGET_YEAR}-${monthStr}-01`, { waitUntil: 'domcontentloaded' });
+                await page.goto(`https://m.sports.naver.com/kfootball/schedule/index?category=kleague&date=${TARGET_YEAR}-${monthStr}-01`, { waitUntil: 'domcontentloaded', timeout: 60000 });
                 await new Promise(r => setTimeout(r, 3500));
 
-                try {
-                    await page.waitForSelector('[class*="MatchBox_match_item"]', { timeout: 3000 });
-                } catch (e) {
-                    console.log(`⚠️ ${monthStr}월은 아직 일정이 없거나 비어있습니다.`);
-                }
+                try { await page.waitForSelector('[class*="MatchBox_match_item"]', { timeout: 5000 }); } catch (e) { /* 무시 */ }
 
                 await page.evaluate(async () => {
                     await new Promise((resolve) => {
@@ -128,7 +116,6 @@ export async function runScheduleScraper(isFullSync = false) {
                         else { venueText = `${homeTeam} 홈구장`; }
 
                         const uniqueKey = `${cleanKey}_${homeTeam}_${awayTeam}`;
-
                         results[uniqueKey] = { title: roundStr, opponent: involvesDaejeon ? (isDaejeonHome ? awayTeam : homeTeam) : awayTeam, match: `${homeTeam} vs ${awayTeam}`, homeTeam, awayTeam, time: timeStr, venue: venueText, type: matchType, score: scoreStr, status: appStatus, dateKey: cleanKey, naverGameId: item.querySelector('a[href*="/game/"]')?.getAttribute('href')?.match(/\d+/)?.[0] || "" };
                     });
                     return results;
@@ -166,10 +153,9 @@ export async function runRankingsScraper() {
     let teamStandings = [];
     const finalPlayerRankings = {};
 
-    await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3500));
 
-    console.log(`🛡️ [팀 순위] 데이터 추출 중...`);
     await page.evaluate(() => { const teamBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('팀 순위')); if(teamBtn) teamBtn.click(); });
     await new Promise(r => setTimeout(r, 1500));
 
@@ -185,14 +171,12 @@ export async function runRankingsScraper() {
         return results.slice(0, 12);
     });
 
-    console.log(`🏃‍♂️ [선수 기록] 탭으로 이동 중...`);
     await page.evaluate(() => { const playerBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('선수 기록')); if(playerBtn) playerBtn.click(); });
     await new Promise(r => setTimeout(r, 1500));
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 8000) { clearInterval(t); window.scrollTo(0, 0); r(); } }, 100); }); });
     await new Promise(r => setTimeout(r, 1500));
 
     for (const cat of PLAYER_CATEGORIES) {
-        console.log(`🖱️ [${cat.name}] 추출 중...`);
         try {
             await page.evaluate((catName) => { const targetBtn = Array.from(document.querySelectorAll('[class*="TableHead_button_sort__"]')).find(btn => btn.textContent.includes(catName)); if (targetBtn) targetBtn.click(); }, cat.name);
             await new Promise(r => setTimeout(r, 1500));
@@ -209,9 +193,7 @@ export async function runRankingsScraper() {
                 }
                 return results;
             });
-        } catch (catErr) {
-            console.log(`⚠️ ${cat.name} 추출 중 유실(무시하고 진행)`);
-        }
+        } catch (catErr) { /* 무시 */ }
     }
 
     const targetDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'userSchedules_v305', FAMILY_KEY);
@@ -222,7 +204,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] - 🚨 기획자님의 터미널 환경과 100% 동일한 '순정' 로직 적용 완료
+// 3. [라인업 스크래퍼] - 🚨 Render 타임아웃 방지 (domcontentloaded 적용)
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
@@ -254,33 +236,37 @@ export async function runLineupScraper() {
     if (!targetMatch || !targetMatch.naverGameId) { console.log(`⚠️ 수집 가능한 대전 경기를 찾을 수 없습니다.`); return; }
     console.log(`🎯 타겟팅 성공: [${targetMatch.dateKey}] ${targetMatch.match}`);
     
-    // 🚨 [핵심 수술] 터미널 환경과 동일하게 CSS/이미지 차단 없이 페이지를 온전히 엽니다!
-    const page = await browser.newPage();
-    await page.setCacheEnabled(false);
-    await page.setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36');
-    await page.setViewport({ width: 412, height: 915, isMobile: true, hasTouch: true });
+    const page = await setupTurboPage(browser); 
     
-    // 네트워크가 완전히 조용해질 때까지 기다립니다 (기획자님 로컬 코드와 동일)
-    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'networkidle2' });
+    // 🚨 핵심 수정: networkidle2 대신 domcontentloaded 사용, 타임아웃 60초로 연장
+    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     
-    // 경기 후 기록 탭으로 튕겼다면 강제로 라인업 탭 클릭
-    await new Promise(r => setTimeout(r, 1500));
+    // 네이버 SPA(React)가 렌더링될 시간을 충분히 줍니다.
+    await new Promise(r => setTimeout(r, 4500));
+    
+    // 경기 종료 후 기록 탭으로 튕긴 경우 강제로 라인업 탭 클릭 (로컬 방식 유지)
     await page.evaluate(() => {
-        const lineupTab = document.querySelector('a[href$="/lineup"]');
-        if(lineupTab) lineupTab.click();
+        const lineupLinks = document.querySelectorAll('a[href*="/lineup"]');
+        for (let link of lineupLinks) {
+            if (link.offsetHeight > 0) {
+                link.click();
+                break;
+            }
+        }
     });
+    await new Promise(r => setTimeout(r, 2000)); 
 
-    try { await page.waitForSelector('[class*="name" i]', { timeout: 8000 }); } catch (e) { console.log("이름 태그 대기 타임아웃 (무시하고 진행)"); }
+    try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) { console.log("이름 태그 대기 타임아웃 (무시하고 진행)"); }
     
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 6000) { clearInterval(t); r(); } }, 100); }); });
     await new Promise(r => setTimeout(r, 1000));
 
+    // 🚨 기획자님이 성공하신 완벽한 태그 추출 로직 100% 유지
     const extractedData = await page.evaluate(() => {
         const playersMap = new Map(); 
         const exactBlocked = ['감독', '코치', '승', '무', '패', '기록', '상세', '보기', '교체', '투입', '아웃', '홈', '원정'];
         const teamNames = ['서울', '대전', '울산', '포항', '김천', '제주', '전북', '광주', '강원', '인천', '대구', '수원', '안양', '부천'];
 
-        // 터미널과 동일한 태그 검색 방식 유지
         document.querySelectorAll('[class*="player_item" i], [class*="Formation_player" i], [class*="player_card" i]').forEach((wrap) => {
             const nameEl = wrap.querySelector('[class*="name" i]');
             if (!nameEl) return;
@@ -311,7 +297,8 @@ export async function runLineupScraper() {
 
     if (extractedData.players.length === 0) { console.log(`⚠️ 경기 전입니다. 라인업이 아직 발표되지 않았습니다.`); return; }
 
-    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'networkidle2' });
+    // 🚨 핵심 수정: networkidle2 대신 domcontentloaded 사용, 타임아웃 60초 연장
+    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3500)); 
     await page.evaluate(async () => { window.scrollBy(0, 1500); await new Promise(r => setTimeout(r, 500)); window.scrollBy(0, -1500); });
 
@@ -360,11 +347,7 @@ export async function runLineupScraper() {
     const awayFinal = { formation: extractedData.awayForm, forwards: (aStarters.length === 11 ? aStarters.slice(0, 10) : aStarters.filter(p => !(p.pos||'').toUpperCase().includes('G'))).map(p => ({...merge(p), subOut: p.subOutFlag || null})), goalkeeper: merge(aStarters.find(p => (p.pos||'').toUpperCase().includes('G')) || aStarters[aStarters.length-1] || {name:''}), bench: aBench.map(p => ({...merge(p), subIn: p.subTime || null})) };
 
     const finalLineup = {
-        matchInfo: { 
-            opponent: isDaejeonHome ? targetMatch.awayTeam : targetMatch.homeTeam, 
-            date: targetMatch.dateKey,
-            status: targetMatch.status || '경기종료'
-        },
+        matchInfo: { opponent: isDaejeonHome ? targetMatch.awayTeam : targetMatch.homeTeam, date: targetMatch.dateKey, status: targetMatch.status || '경기종료' },
         DAEJEON: isDaejeonHome ? homeFinal : awayFinal, DAEJEON_BENCH: isDaejeonHome ? homeFinal.bench : awayFinal.bench,
         OPPONENT: isDaejeonHome ? awayFinal : homeFinal, OPPONENT_BENCH: isDaejeonHome ? awayFinal.bench : homeFinal.bench
     };
