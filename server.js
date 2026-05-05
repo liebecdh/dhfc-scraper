@@ -242,7 +242,7 @@ cron.schedule('* * * * *', async () => {
   const kickoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm);
   const diff = (kickoff - now) / 60000; 
 
-  if (diff <= 90 && diff >= 45) {
+  if (diff <= 90 && diff >= 40) {
     await safeExecute('라인업 1분 단위 핀셋 타격', runLineupScraper);
   }
 
