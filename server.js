@@ -1,7 +1,6 @@
 import express from 'express';
 import cron from 'node-cron';
 import { initializeApp } from 'firebase/app';
-// 🚨 updateDoc 가 추가되었습니다!
 import { getFirestore, doc, getDoc, onSnapshot, updateDoc } from 'firebase/firestore';
 import admin from 'firebase-admin'; 
 import { 
@@ -36,8 +35,8 @@ const PORT = process.env.PORT || 10000;
 let isScraping = false; 
 let todayMatchInfo = null; 
 let lastNotifiedMsgId = null;
-let lastNotifiedLineupDate = null; // 👈 라인업 푸시 중복 방지용 메모리
-let isKLeagueMatchDay = false; // 🚨 [추가] 오늘 K리그 경기가 있는가?
+let lastNotifiedLineupDate = null; 
+let isKLeagueMatchDay = false; 
 
 // ==========================================
 // 🚨 실시간 라인업 감시 및 푸시 알림 엔진
@@ -62,24 +61,19 @@ function startLineupObserver() {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
 
-    // 오늘 경기인지, 그리고 이미 오늘 알림을 보냈는지 확인
     if (matchDate !== todayStr || lastNotifiedLineupDate === matchDate) return;
 
-    // 라인업에 선수가 채워졌는지 확인 (forwards에 선수가 들어왔다면 스크래핑 성공으로 간주)
     const isLineupReady = lineupData.DAEJEON && lineupData.DAEJEON.forwards && lineupData.DAEJEON.forwards.length > 0;
 
     if (isLineupReady) {
-      lastNotifiedLineupDate = matchDate; // 오늘 알림 발송 완료 처리
+      lastNotifiedLineupDate = matchDate; 
 
-      // 가족 토큰 모으기
       const targetTokens = Object.values(chat.fcmTokens).filter(token => token);
       if (targetTokens.length === 0) return;
 
-      // 오늘 경기 정보 (관제탑 메모리 활용)
       const opponent = lineupData.matchInfo.opponent || todayMatchInfo?.opponent || '상대팀';
       const title = todayMatchInfo?.title || 'K리그1';
 
-      // 라인업 전용 푸시 알림 장전!
       const messagePayload = {
         notification: {
           title: `🚨 [선발 라인업 발표]`,
@@ -87,7 +81,7 @@ function startLineupObserver() {
         },
         webpush: {
           fcmOptions: {
-            link: "/?tab=K-LEAGUE" // 라인업 알림 누르면 K리그 탭으로 자동 이동!
+            link: "/?tab=K-LEAGUE" 
           }
         },
         tokens: targetTokens
@@ -170,7 +164,6 @@ async function safeExecute(taskName, taskFn) {
   }
 }
 
-// 🚨 [수정 완료] K리그 경기 여부 판단 로직 추가
 async function updateTodayMatchMemory() {
   const targetDocRef = doc(db, 'artifacts', 'daejeon-shift-pro-test-sandbox', 'public', 'data', 'userSchedules_v305', '조아');
   const snap = await getDoc(targetDocRef);
@@ -179,7 +172,6 @@ async function updateTodayMatchMemory() {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
     
-    // 1. 대전 경기 확인
     todayMatchInfo = Object.values(fixtures).find(m => 
       m.dateKey === todayStr && (m.homeTeam.includes('대전') || m.awayTeam.includes('대전'))
     );
@@ -189,7 +181,6 @@ async function updateTodayMatchMemory() {
       console.log(`📅 [메모리] 오늘 대전 경기가 없습니다.`);
     }
 
-    // 2. K리그 전체 경기 확인
     isKLeagueMatchDay = Object.values(fixtures).some(m => m.dateKey === todayStr);
     if (isKLeagueMatchDay) {
       console.log(`🏟️ [메모리] 오늘 K리그1 경기가 있습니다. (실시간 스코어 추적 활성화)`);
@@ -200,7 +191,7 @@ async function updateTodayMatchMemory() {
 }
 
 // ==========================================
-// 🚨 자정(00:00) 라인업 초기화 스케줄러
+// 🚨 [수술 완료] 자정(00:00) 라인업 초기화 스케줄러 (벤치, 골키퍼 빈칸 완벽 추가)
 // ==========================================
 cron.schedule('0 0 * * *', async () => {
   await safeExecute('자정 경기 감지 및 라인업 초기화', async () => {
@@ -208,7 +199,6 @@ cron.schedule('0 0 * * *', async () => {
     if (todayMatchInfo) {
       const targetDocRef = doc(db, 'artifacts', 'daejeon-shift-pro-test-sandbox', 'public', 'data', 'userSchedules_v305', '조아');
       
-      // 오늘 경기가 있다면 이전 라인업을 싹 비워버립니다.
       await updateDoc(targetDocRef, {
         "content.lineupData": {
           matchInfo: {
@@ -216,11 +206,13 @@ cron.schedule('0 0 * * *', async () => {
             opponent: todayMatchInfo.opponent || "상대팀",
             status: "경기전"
           },
-          DAEJEON: { formation: '명단 발표 전', forwards: [], midfielders: [], defenders: [], goalkeeper: null },
-          OPPONENT: { formation: '명단 발표 전', forwards: [], midfielders: [], defenders: [], goalkeeper: null }
+          DAEJEON: { formation: '', forwards: [], midfielders: [], defenders: [], goalkeeper: { name: '' } },
+          OPPONENT: { formation: '', forwards: [], midfielders: [], defenders: [], goalkeeper: { name: '' } },
+          DAEJEON_BENCH: [],
+          OPPONENT_BENCH: []
         }
       });
-      console.log("🧹 [자정 초기화] 오늘 경기 라인업 데이터를 깨끗하게 비웠습니다.");
+      console.log("🧹 [자정 초기화] 오늘 경기 라인업 및 벤치 데이터를 깨끗하게 비웠습니다.");
     }
   });
 }, { timezone: "Asia/Seoul" });
@@ -233,9 +225,8 @@ cron.schedule('1 15 * * *', async () => {
   });
 }, { timezone: "Asia/Seoul" });
 
-// 🚨 [수정 완료] 경기 없는 날은 추적 안 함!
 cron.schedule('*/3 14-22 * * *', async () => {
-  if (!isKLeagueMatchDay) return; // 👈 K리그 경기가 없으면 여기서 컷!
+  if (!isKLeagueMatchDay) return; 
 
   await safeExecute('라이브 스코어/순위 실시간 추적', async () => {
     await runScheduleScraper(false); 
@@ -267,15 +258,26 @@ cron.schedule('* * * * *', async () => {
 app.get('/', (req, res) => res.send('⚽ DHFC Scraper Control Tower Active'));
 
 app.get('/test', async (req, res) => {
-  res.send('⚽ [가벼운 청소] 기존 중복 일정을 깨끗하게 비웠습니다! 이제 1~2분 뒤 자동으로 새 일정이 채워집니다.');
+  res.send('⚽ [가벼운 청소] 기존 라인업 찌꺼기와 중복 일정을 비우고 새 일정을 불러옵니다!');
   
   await safeExecute('[가벼운 찌꺼기 청소]', async () => {
     const targetDocRef = doc(db, 'artifacts', 'daejeon-shift-pro-test-sandbox', 'public', 'data', 'userSchedules_v305', '조아');
-    // 빈 깡통으로 덮어써서 찌꺼기 완벽 삭제
-    await updateDoc(targetDocRef, { "content.kLeagueFixtures": {} });
-    console.log("🧹 [찌꺼기 청소 완료] 기존 일정을 싹 비웠습니다. 이제 다시 스크래핑을 시작합니다.");
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+
+    // 🚨 벤치 찌꺼기 버그를 즉시 고치기 위해 test 경로에도 라인업 비우기 코드를 추가했습니다.
+    await updateDoc(targetDocRef, { 
+      "content.kLeagueFixtures": {},
+      "content.lineupData": {
+          matchInfo: { date: todayStr, opponent: "상대팀", status: "경기전" },
+          DAEJEON: { formation: '', forwards: [], midfielders: [], defenders: [], goalkeeper: { name: '' } },
+          OPPONENT: { formation: '', forwards: [], midfielders: [], defenders: [], goalkeeper: { name: '' } },
+          DAEJEON_BENCH: [],
+          OPPONENT_BENCH: []
+      }
+    });
+    console.log("🧹 [찌꺼기 청소 완료] 벤치 명단과 기존 일정을 싹 비웠습니다. 3초 뒤 일정 스크래핑을 시작합니다.");
     
-    // 청소 후 3초 쉬었다가 다시 채워넣기 시작!
     setTimeout(() => {
         runScheduleScraper(true);
     }, 3000);
@@ -285,6 +287,6 @@ app.get('/test', async (req, res) => {
 app.listen(PORT, async () => {
   console.log(`🚀 관제 서버가 포트 ${PORT}에서 시작되었습니다.`);
   await updateTodayMatchMemory(); 
-  startChatObserver(); // 채팅 감시
-  startLineupObserver(); // 👈 라인업 감시 동시 가동!
+  startChatObserver(); 
+  startLineupObserver(); 
 });
