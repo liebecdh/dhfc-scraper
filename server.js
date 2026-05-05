@@ -38,7 +38,6 @@ let lastNotifiedMsgId = null;
 let lastNotifiedLineupDate = null; 
 let isKLeagueMatchDay = false; 
 
-// 🚨 [새로 추가된 방어막 변수] 서버 켜진 직후 오작동 방지용
 let isLineupFirstRun = true; 
 let isChatFirstRun = true;
 
@@ -61,7 +60,6 @@ function startLineupObserver() {
 
     if (!lineupData || !lineupData.matchInfo || !chat || !chat.fcmTokens) return;
 
-    // 🚨 [방어막 1 작동] 서버 켜지고 처음 읽은 데이터는 무조건 알림 무시 (렌더 재부팅 대비)
     if (isLineupFirstRun) {
         isLineupFirstRun = false;
         if (lineupData.DAEJEON?.forwards?.length > 0) {
@@ -104,6 +102,7 @@ function startLineupObserver() {
       const opponent = lineupData.matchInfo.opponent || todayMatchInfo?.opponent || '상대팀';
       const title = todayMatchInfo?.title || 'K리그1';
 
+      // 🚨 [수술 완료] Vercel 주소 하드코딩 (라인업 -> K-LEAGUE 탭)
       const messagePayload = {
         notification: {
           title: `🚨 [선발 라인업 발표]`,
@@ -111,7 +110,7 @@ function startLineupObserver() {
         },
         webpush: {
           fcmOptions: {
-            link: "/?tab=K-LEAGUE" 
+            link: "https://dhfc-shift.vercel.app/?tab=K-LEAGUE" 
           }
         },
         tokens: targetTokens
@@ -143,7 +142,6 @@ function startChatObserver() {
 
     const latestMsg = chat.messages[chat.messages.length - 1];
     
-    // 🚨 [방어막 1 작동] 서버 켜지고 처음 읽은 채팅 데이터 무조건 무시!
     if (isChatFirstRun) {
         isChatFirstRun = false;
         lastNotifiedMsgId = latestMsg.id;
@@ -152,8 +150,6 @@ function startChatObserver() {
 
     if (lastNotifiedMsgId === latestMsg.id) return;
 
-    // 🚨 [방어막 2 작동] 렌더 다중 서버로 인한 중복 알림 절대 방어!
-    // 메시지 ID(작성시간 timestamp)가 지금 시간보다 15초 이상 옛날 것이면 절대 안 보냅니다.
     const msgTime = parseInt(latestMsg.id, 10);
     if (!isNaN(msgTime) && (Date.now() - msgTime > 15000)) {
         console.log(`🔇 [채팅 푸시 차단] 15초 이상 지난 과거 메시지 중복 발송 차단`);
@@ -176,6 +172,7 @@ function startChatObserver() {
     const senderName = profiles[latestMsg.sender]?.name || '가족';
     const notifyBody = latestMsg.imageUrl ? '(사진)' : latestMsg.text;
 
+    // 🚨 [수술 완료] Vercel 주소 하드코딩 (채팅 -> CHAT 탭)
     const messagePayload = {
       notification: {
         title: `${senderName}님의 메시지 💬`,
@@ -183,7 +180,7 @@ function startChatObserver() {
       },
       webpush: {
         fcmOptions: {
-          link: "/?tab=CHAT" 
+          link: "https://dhfc-shift.vercel.app/?tab=CHAT" 
         }
       },
       tokens: targetTokens
@@ -298,7 +295,6 @@ cron.schedule('* * * * *', async () => {
     await safeExecute('경기 종료 후 기록 스위핑', runLineupScraper);
   }
 
-  // 🚨 [수술 완료] 밤 11시부터 11시 30분까지 3분 간격으로 평점/득점 완벽 최종 마감
   if (now.getHours() === 23 && now.getMinutes() <= 30 && now.getMinutes() % 3 === 0) {
     await safeExecute('밤 11시 평점/기록 최종 마감 스위핑', runLineupScraper);
   }
