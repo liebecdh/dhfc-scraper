@@ -102,16 +102,22 @@ function startLineupObserver() {
       const opponent = lineupData.matchInfo.opponent || todayMatchInfo?.opponent || '상대팀';
       const title = todayMatchInfo?.title || 'K리그1';
 
-      // 🚨 [수술 완료] Vercel 주소 하드코딩 (라인업 -> K-LEAGUE 탭)
+      // 🚨 [강제 이동 수술] PWA 백그라운드 클릭 시 라인업 탭으로 무조건 강제 이동하도록 3중 딥링크 장착
       const messagePayload = {
         notification: {
           title: `🚨 [선발 라인업 발표]`,
           body: `${title} 대전 VS ${opponent} 출전 명단이 업데이트되었습니다! ⚽🔥`
         },
         webpush: {
+          notification: {
+            click_action: "https://dhfc-shift.vercel.app/?tab=K-LEAGUE" // 1. 강제 클릭 액션
+          },
           fcmOptions: {
-            link: "https://dhfc-shift.vercel.app/?tab=K-LEAGUE" 
+            link: "https://dhfc-shift.vercel.app/?tab=K-LEAGUE" // 2. 표준 링크
           }
+        },
+        data: {
+          url: "https://dhfc-shift.vercel.app/?tab=K-LEAGUE" // 3. 커스텀 워커용 예비 데이터
         },
         tokens: targetTokens
       };
@@ -172,16 +178,22 @@ function startChatObserver() {
     const senderName = profiles[latestMsg.sender]?.name || '가족';
     const notifyBody = latestMsg.imageUrl ? '(사진)' : latestMsg.text;
 
-    // 🚨 [수술 완료] Vercel 주소 하드코딩 (채팅 -> CHAT 탭)
+    // 🚨 [강제 이동 수술] 채팅 푸시 클릭 시 CHAT 탭으로 무조건 강제 이동하도록 3중 딥링크 장착
     const messagePayload = {
       notification: {
         title: `${senderName}님의 메시지 💬`,
         body: notifyBody
       },
       webpush: {
+        notification: {
+          click_action: "https://dhfc-shift.vercel.app/?tab=CHAT" // 1. 강제 클릭 액션
+        },
         fcmOptions: {
-          link: "https://dhfc-shift.vercel.app/?tab=CHAT" 
+          link: "https://dhfc-shift.vercel.app/?tab=CHAT" // 2. 표준 링크
         }
+      },
+      data: {
+        url: "https://dhfc-shift.vercel.app/?tab=CHAT" // 3. 커스텀 워커용 예비 데이터
       },
       tokens: targetTokens
     };
