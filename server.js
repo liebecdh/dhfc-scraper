@@ -133,8 +133,13 @@ function startChatObserver() {
     if (!chat || !chat.messages || chat.messages.length === 0) return;
 
     const latestMsg = chat.messages[chat.messages.length - 1];
+    
+    // 🚨 [수술 완료] 이미 보낸 메시지거나, 3초 안에 또 보내려고 하면 원천 차단! (중복 푸시 방어)
     if (lastNotifiedMsgId === latestMsg.id) return;
+    if (global.lastPushTime && (Date.now() - global.lastPushTime < 3000)) return; 
+
     lastNotifiedMsgId = latestMsg.id;
+    global.lastPushTime = Date.now();
 
     const tokensMap = chat.fcmTokens || {};
     const targetTokens = Object.entries(tokensMap)
