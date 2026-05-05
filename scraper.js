@@ -154,7 +154,7 @@ export async function runScheduleScraper(isFullSync = false) {
 }
 
 // ==========================================
-// 2. [순위 스크래퍼] - 에러 방어막 추가본
+// 2. [순위 스크래퍼] 
 // ==========================================
 export async function runRankingsScraper() {
   console.log(`\n🚀 [순위] ${TARGET_YEAR}년 랭킹 데이터 수집 시작...`);
@@ -209,7 +209,7 @@ export async function runRankingsScraper() {
                 return results;
             });
         } catch (catErr) {
-            console.log(`⚠️ ${cat.name} 추출 중 컨텍스트 유실(무시하고 진행)`);
+            console.log(`⚠️ ${cat.name} 추출 중 유실(무시하고 진행)`);
         }
     }
 
@@ -221,7 +221,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] - 🚨 기획자님이 성공하신 예전 '태그 기반 방식'으로 완벽 복구
+// 3. [라인업 스크래퍼] - 🚨 경기 후 탭 튕김 현상 방지 & 푸시 차단용 상태값(status) 추가!
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
@@ -256,8 +256,15 @@ export async function runLineupScraper() {
     const page = await setupTurboPage(browser); 
     await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded' });
     
-    // 🚨 예전 방식대로 이름표를 기다립니다 (로딩 대기시간 4.5초 확보)
-    await new Promise(r => setTimeout(r, 4500));
+    // 🚨 [핵심 수술] 접속 직후, 네이버가 맘대로 '기록' 탭으로 튕겼다면 강제로 '라인업' 버튼 다시 클릭!
+    await new Promise(r => setTimeout(r, 2500));
+    await page.evaluate(() => {
+        const tabs = Array.from(document.querySelectorAll('a, button, li, span, em'));
+        const lineupTab = tabs.find(el => el.innerText && el.innerText.trim() === '라인업');
+        if (lineupTab) lineupTab.click();
+    });
+    await new Promise(r => setTimeout(r, 2000)); // 탭 전환 대기
+
     try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) { console.log("이름 태그 대기 타임아웃 (무시하고 진행)"); }
     
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 6000) { clearInterval(t); r(); } }, 100); }); });
@@ -347,7 +354,11 @@ export async function runLineupScraper() {
     const awayFinal = { formation: extractedData.awayForm, forwards: (aStarters.length === 11 ? aStarters.slice(0, 10) : aStarters.filter(p => !(p.pos||'').toUpperCase().includes('G'))).map(p => ({...merge(p), subOut: p.subOutFlag || null})), goalkeeper: merge(aStarters.find(p => (p.pos||'').toUpperCase().includes('G')) || aStarters[aStarters.length-1] || {name:''}), bench: aBench.map(p => ({...merge(p), subIn: p.subTime || null})) };
 
     const finalLineup = {
-        matchInfo: { opponent: isDaejeonHome ? targetMatch.awayTeam : targetMatch.homeTeam, date: targetMatch.dateKey },
+        matchInfo: { 
+            opponent: isDaejeonHome ? targetMatch.awayTeam : targetMatch.homeTeam, 
+            date: targetMatch.dateKey,
+            status: targetMatch.status // 🚨 경기 종료 후 푸시를 막기 위해 현재 상태값 추가!
+        },
         DAEJEON: isDaejeonHome ? homeFinal : awayFinal, DAEJEON_BENCH: isDaejeonHome ? homeFinal.bench : awayFinal.bench,
         OPPONENT: isDaejeonHome ? awayFinal : homeFinal, OPPONENT_BENCH: isDaejeonHome ? awayFinal.bench : homeFinal.bench
     };
