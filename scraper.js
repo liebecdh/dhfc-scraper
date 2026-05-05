@@ -36,7 +36,7 @@ const CHROME_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-
 
 async function setupTurboPage(browser) {
     const page = await browser.newPage();
-    // 🚨 렌더 서버 환경에 맞춰 타임아웃 제한을 해제/연장합니다.
+    // 🚨 렌더 서버 환경에 맞춰 타임아웃 제한을 60초로 넉넉하게 연장
     page.setDefaultNavigationTimeout(60000); 
     page.setDefaultTimeout(60000);
 
@@ -142,7 +142,7 @@ export async function runScheduleScraper(isFullSync = false) {
 }
 
 // ==========================================
-// 2. [순위 스크래퍼] 
+// 2. [순위 스크래퍼] - 🚨 기획자님의 완벽한 원본 로직 복구 & 렉 대기시간 연장
 // ==========================================
 export async function runRankingsScraper() {
   console.log(`\n🚀 [순위] ${TARGET_YEAR}년 랭킹 데이터 수집 시작...`);
@@ -154,13 +154,17 @@ export async function runRankingsScraper() {
     const finalPlayerRankings = {};
 
     await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await new Promise(r => setTimeout(r, 3500));
+    await new Promise(r => setTimeout(r, 4000)); // 네이버 SPA 최초 로딩 대기
 
+    console.log(`🛡️ [팀 순위] 데이터 추출 중...`);
     await page.evaluate(() => { const teamBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('팀 순위')); if(teamBtn) teamBtn.click(); });
-    await new Promise(r => setTimeout(r, 1500));
+    
+    // 🚨 [핵심 수정 1] 팀 순위 표가 그려질 때까지 렌더 서버 렉을 고려해 충분히 기다림 (1.5초 -> 4초 연장)
+    await new Promise(r => setTimeout(r, 4000));
 
     teamStandings = await page.evaluate(() => {
         const results = [];
+        // 기획자님이 짜신 원래의 완벽한 HTML 클래스 기반 로직
         document.querySelectorAll('.TableBody_type_team_record [class*="TableBody_item__"], [class*="TableBody_item__"]').forEach((row, idx) => {
             const teamName = row.querySelector('strong, [class*="TeamInfo_name__"], [class*="name__"]')?.textContent.trim();
             if(!teamName) return;
@@ -171,15 +175,20 @@ export async function runRankingsScraper() {
         return results.slice(0, 12);
     });
 
+    console.log(`🏃‍♂️ [선수 기록] 탭으로 이동 중...`);
     await page.evaluate(() => { const playerBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('선수 기록')); if(playerBtn) playerBtn.click(); });
-    await new Promise(r => setTimeout(r, 1500));
+    await new Promise(r => setTimeout(r, 2000));
+    
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 8000) { clearInterval(t); window.scrollTo(0, 0); r(); } }, 100); }); });
     await new Promise(r => setTimeout(r, 1500));
 
     for (const cat of PLAYER_CATEGORIES) {
+        console.log(`🖱️ [${cat.name}] 추출 중...`);
         try {
             await page.evaluate((catName) => { const targetBtn = Array.from(document.querySelectorAll('[class*="TableHead_button_sort__"]')).find(btn => btn.textContent.includes(catName)); if (targetBtn) targetBtn.click(); }, cat.name);
-            await new Promise(r => setTimeout(r, 1500));
+            
+            // 🚨 [핵심 수정 2] '이름없음(스켈레톤 UI)' 방지: 카테고리 탭을 누른 후 진짜 데이터가 뜰 때까지 넉넉히 대기 (1.5초 -> 3초 연장)
+            await new Promise(r => setTimeout(r, 3000));
 
             finalPlayerRankings[cat.key] = await page.evaluate(() => {
                 const results = [];
@@ -193,7 +202,9 @@ export async function runRankingsScraper() {
                 }
                 return results;
             });
-        } catch (catErr) { /* 무시 */ }
+        } catch (catErr) {
+            console.log(`⚠️ ${cat.name} 추출 중 유실(무시하고 진행)`);
+        }
     }
 
     const targetDocRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'userSchedules_v305', FAMILY_KEY);
@@ -204,7 +215,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] - 🚨 Render 타임아웃 방지 (domcontentloaded 적용)
+// 3. [라인업 스크래퍼] - 기획자님의 순정 로직 유지 & 렌더 타임아웃 방지
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
@@ -238,13 +249,9 @@ export async function runLineupScraper() {
     
     const page = await setupTurboPage(browser); 
     
-    // 🚨 핵심 수정: networkidle2 대신 domcontentloaded 사용, 타임아웃 60초로 연장
     await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    
-    // 네이버 SPA(React)가 렌더링될 시간을 충분히 줍니다.
     await new Promise(r => setTimeout(r, 4500));
     
-    // 경기 종료 후 기록 탭으로 튕긴 경우 강제로 라인업 탭 클릭 (로컬 방식 유지)
     await page.evaluate(() => {
         const lineupLinks = document.querySelectorAll('a[href*="/lineup"]');
         for (let link of lineupLinks) {
@@ -256,12 +263,11 @@ export async function runLineupScraper() {
     });
     await new Promise(r => setTimeout(r, 2000)); 
 
-    try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) { console.log("이름 태그 대기 타임아웃 (무시하고 진행)"); }
+    try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) { /* 무시 */ }
     
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 6000) { clearInterval(t); r(); } }, 100); }); });
     await new Promise(r => setTimeout(r, 1000));
 
-    // 🚨 기획자님이 성공하신 완벽한 태그 추출 로직 100% 유지
     const extractedData = await page.evaluate(() => {
         const playersMap = new Map(); 
         const exactBlocked = ['감독', '코치', '승', '무', '패', '기록', '상세', '보기', '교체', '투입', '아웃', '홈', '원정'];
@@ -297,7 +303,6 @@ export async function runLineupScraper() {
 
     if (extractedData.players.length === 0) { console.log(`⚠️ 경기 전입니다. 라인업이 아직 발표되지 않았습니다.`); return; }
 
-    // 🚨 핵심 수정: networkidle2 대신 domcontentloaded 사용, 타임아웃 60초 연장
     await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3500)); 
     await page.evaluate(async () => { window.scrollBy(0, 1500); await new Promise(r => setTimeout(r, 500)); window.scrollBy(0, -1500); });
