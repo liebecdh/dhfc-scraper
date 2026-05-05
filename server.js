@@ -58,10 +58,31 @@ function startLineupObserver() {
     if (!lineupData || !lineupData.matchInfo || !chat || !chat.fcmTokens) return;
 
     const matchDate = lineupData.matchInfo.date;
+    const matchStatus = lineupData.matchInfo.status; // 🚨 스크래퍼가 보내준 상태값 추출
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
 
+    // 오늘 경기가 아니거나 이미 알림을 보낸 경우 차단
     if (matchDate !== todayStr || lastNotifiedLineupDate === matchDate) return;
+
+    // 🚨 [푸시 완벽 차단 로직 1] 경기가 이미 시작했거나 종료되었으면 알림 발송 취소
+    if (matchStatus === '경기종료' || matchStatus === '경기중' || matchStatus === '종료') {
+        console.log(`🔇 [알림 차단] 현재 상태가 '${matchStatus}' 이므로 늦은 라인업 푸시를 차단합니다.`);
+        lastNotifiedLineupDate = matchDate; // 메모리에 저장해서 두 번 다시 체크 안하게 함
+        return;
+    }
+
+    // 🚨 [푸시 완벽 차단 로직 2] 렌더 서버가 재시작되어 메모리가 날아갔을 경우를 대비한 '시간' 기반 2중 차단
+    if (todayMatchInfo && todayMatchInfo.time) {
+        const [hh, mm] = todayMatchInfo.time.split(':').map(Number);
+        const kickoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm);
+        // 현재 시간이 킥오프 시간과 같거나 지났다면 차단 (라인업 발표는 무조건 경기 전이어야 함)
+        if (now >= kickoff) {
+            console.log(`🔇 [알림 차단] 이미 경기 시작 시간(${todayMatchInfo.time})이 지났으므로 늦은 푸시를 차단합니다.`);
+            lastNotifiedLineupDate = matchDate; // 메모리에 저장해서 두 번 다시 체크 안하게 함
+            return;
+        }
+    }
 
     const isLineupReady = lineupData.DAEJEON && lineupData.DAEJEON.forwards && lineupData.DAEJEON.forwards.length > 0;
 
@@ -191,7 +212,7 @@ async function updateTodayMatchMemory() {
 }
 
 // ==========================================
-// 🚨 [수술 완료] 자정(00:00) 라인업 초기화 스케줄러 (벤치, 골키퍼 빈칸 완벽 추가)
+// 🚨 자정(00:00) 라인업 초기화 스케줄러 
 // ==========================================
 cron.schedule('0 0 * * *', async () => {
   await safeExecute('자정 경기 감지 및 라인업 초기화', async () => {
@@ -246,7 +267,7 @@ cron.schedule('* * * * *', async () => {
     await safeExecute('라인업 1분 단위 핀셋 타격', runLineupScraper);
   }
 
-  if (diff <= -150 && diff >= -180 && now.getMinutes() % 1 === 0) {
+  if (diff <= -180 && diff >= -210 && now.getMinutes() % 1 === 0) {
     await safeExecute('경기 종료 후 기록 스위핑', runLineupScraper);
   }
 
@@ -265,7 +286,6 @@ app.get('/test', async (req, res) => {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
 
-    // 🚨 벤치 찌꺼기 버그를 즉시 고치기 위해 test 경로에도 라인업 비우기 코드를 추가했습니다.
     await updateDoc(targetDocRef, { 
       "content.kLeagueFixtures": {},
       "content.lineupData": {
