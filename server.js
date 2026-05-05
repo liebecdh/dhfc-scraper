@@ -38,6 +38,10 @@ let lastNotifiedMsgId = null;
 let lastNotifiedLineupDate = null; 
 let isKLeagueMatchDay = false; 
 
+// 🚨 [새로 추가된 방어막 변수] 서버 켜진 직후 오작동 방지용
+let isLineupFirstRun = true; 
+let isChatFirstRun = true;
+
 // ==========================================
 // 🚨 실시간 라인업 감시 및 푸시 알림 엔진
 // ==========================================
@@ -57,29 +61,34 @@ function startLineupObserver() {
 
     if (!lineupData || !lineupData.matchInfo || !chat || !chat.fcmTokens) return;
 
-    const matchDate = lineupData.matchInfo.date;
-    const matchStatus = lineupData.matchInfo.status; // 🚨 스크래퍼가 보내준 상태값 추출
-    const now = new Date();
-    const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-
-    // 오늘 경기가 아니거나 이미 알림을 보낸 경우 차단
-    if (matchDate !== todayStr || lastNotifiedLineupDate === matchDate) return;
-
-    // 🚨 [푸시 완벽 차단 로직 1] 경기가 이미 시작했거나 종료되었으면 알림 발송 취소
-    if (matchStatus === '경기종료' || matchStatus === '경기중' || matchStatus === '종료') {
-        console.log(`🔇 [알림 차단] 현재 상태가 '${matchStatus}' 이므로 늦은 라인업 푸시를 차단합니다.`);
-        lastNotifiedLineupDate = matchDate; // 메모리에 저장해서 두 번 다시 체크 안하게 함
+    // 🚨 [방어막 1 작동] 서버 켜지고 처음 읽은 데이터는 무조건 알림 무시 (렌더 재부팅 대비)
+    if (isLineupFirstRun) {
+        isLineupFirstRun = false;
+        if (lineupData.DAEJEON?.forwards?.length > 0) {
+            lastNotifiedLineupDate = lineupData.matchInfo.date;
+        }
         return;
     }
 
-    // 🚨 [푸시 완벽 차단 로직 2] 렌더 서버가 재시작되어 메모리가 날아갔을 경우를 대비한 '시간' 기반 2중 차단
+    const matchDate = lineupData.matchInfo.date;
+    const matchStatus = lineupData.matchInfo.status; 
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+
+    if (matchDate !== todayStr || lastNotifiedLineupDate === matchDate) return;
+
+    if (matchStatus === '경기종료' || matchStatus === '경기중' || matchStatus === '종료') {
+        console.log(`🔇 [알림 차단] 현재 상태가 '${matchStatus}' 이므로 늦은 라인업 푸시를 차단합니다.`);
+        lastNotifiedLineupDate = matchDate; 
+        return;
+    }
+
     if (todayMatchInfo && todayMatchInfo.time) {
         const [hh, mm] = todayMatchInfo.time.split(':').map(Number);
         const kickoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm);
-        // 현재 시간이 킥오프 시간과 같거나 지났다면 차단 (라인업 발표는 무조건 경기 전이어야 함)
         if (now >= kickoff) {
             console.log(`🔇 [알림 차단] 이미 경기 시작 시간(${todayMatchInfo.time})이 지났으므로 늦은 푸시를 차단합니다.`);
-            lastNotifiedLineupDate = matchDate; // 메모리에 저장해서 두 번 다시 체크 안하게 함
+            lastNotifiedLineupDate = matchDate; 
             return;
         }
     }
@@ -134,12 +143,25 @@ function startChatObserver() {
 
     const latestMsg = chat.messages[chat.messages.length - 1];
     
-    // 🚨 [수술 완료] 이미 보낸 메시지거나, 3초 안에 또 보내려고 하면 원천 차단! (중복 푸시 방어)
+    // 🚨 [방어막 1 작동] 서버 켜지고 처음 읽은 채팅 데이터 무조건 무시!
+    if (isChatFirstRun) {
+        isChatFirstRun = false;
+        lastNotifiedMsgId = latestMsg.id;
+        return;
+    }
+
     if (lastNotifiedMsgId === latestMsg.id) return;
-    if (global.lastPushTime && (Date.now() - global.lastPushTime < 3000)) return; 
+
+    // 🚨 [방어막 2 작동] 렌더 다중 서버로 인한 중복 알림 절대 방어!
+    // 메시지 ID(작성시간 timestamp)가 지금 시간보다 15초 이상 옛날 것이면 절대 안 보냅니다.
+    const msgTime = parseInt(latestMsg.id, 10);
+    if (!isNaN(msgTime) && (Date.now() - msgTime > 15000)) {
+        console.log(`🔇 [채팅 푸시 차단] 15초 이상 지난 과거 메시지 중복 발송 차단`);
+        lastNotifiedMsgId = latestMsg.id;
+        return; 
+    }
 
     lastNotifiedMsgId = latestMsg.id;
-    global.lastPushTime = Date.now();
 
     const tokensMap = chat.fcmTokens || {};
     const targetTokens = Object.entries(tokensMap)
