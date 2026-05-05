@@ -36,7 +36,6 @@ const CHROME_ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-
 
 async function setupTurboPage(browser) {
     const page = await browser.newPage();
-    // 🚨 렌더 서버 환경에 맞춰 타임아웃 제한을 60초로 넉넉하게 연장
     page.setDefaultNavigationTimeout(60000); 
     page.setDefaultTimeout(60000);
 
@@ -142,7 +141,7 @@ export async function runScheduleScraper(isFullSync = false) {
 }
 
 // ==========================================
-// 2. [순위 스크래퍼] - 🚨 기획자님의 완벽한 원본 로직 복구 & 렉 대기시간 연장
+// 2. [순위 스크래퍼] - 🚨 무식한 시간 대기 삭제, 스마트 센서 장착 완료
 // ==========================================
 export async function runRankingsScraper() {
   console.log(`\n🚀 [순위] ${TARGET_YEAR}년 랭킹 데이터 수집 시작...`);
@@ -154,17 +153,24 @@ export async function runRankingsScraper() {
     const finalPlayerRankings = {};
 
     await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await new Promise(r => setTimeout(r, 4000)); // 네이버 SPA 최초 로딩 대기
+    await new Promise(r => setTimeout(r, 2000)); // 최초 기본 뼈대 로딩 대기
 
-    console.log(`🛡️ [팀 순위] 데이터 추출 중...`);
+    console.log(`🛡️ [팀 순위] 데이터 추출 준비 중...`);
     await page.evaluate(() => { const teamBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('팀 순위')); if(teamBtn) teamBtn.click(); });
     
-    // 🚨 [핵심 수정 1] 팀 순위 표가 그려질 때까지 렌더 서버 렉을 고려해 충분히 기다림 (1.5초 -> 4초 연장)
-    await new Promise(r => setTimeout(r, 4000));
+    // 🚨 [핵심 수술 1] 4초 맹목적 대기 삭제 -> 순위표 태그가 실제로 렌더링될 때까지 감시 (최대 15초 대기)
+    try {
+        await page.waitForSelector('[class*="TableBody_item__"]', { timeout: 15000 });
+    } catch (e) {
+        console.log("⚠️ 팀 순위 표 로딩 지연 (렌더 서버 렉 발생 중)");
+    }
+    
+    // 렌더링이 완전히 그려지도록 살짝 스크롤 해줌 (렌더 서버 팁)
+    await page.evaluate(async () => { window.scrollBy(0, 500); await new Promise(r => setTimeout(r, 500)); window.scrollTo(0, 0); });
 
     teamStandings = await page.evaluate(() => {
         const results = [];
-        // 기획자님이 짜신 원래의 완벽한 HTML 클래스 기반 로직
+        // 기획자님의 완벽한 원본 로직 유지
         document.querySelectorAll('.TableBody_type_team_record [class*="TableBody_item__"], [class*="TableBody_item__"]').forEach((row, idx) => {
             const teamName = row.querySelector('strong, [class*="TeamInfo_name__"], [class*="name__"]')?.textContent.trim();
             if(!teamName) return;
@@ -187,8 +193,9 @@ export async function runRankingsScraper() {
         try {
             await page.evaluate((catName) => { const targetBtn = Array.from(document.querySelectorAll('[class*="TableHead_button_sort__"]')).find(btn => btn.textContent.includes(catName)); if (targetBtn) targetBtn.click(); }, cat.name);
             
-            // 🚨 [핵심 수정 2] '이름없음(스켈레톤 UI)' 방지: 카테고리 탭을 누른 후 진짜 데이터가 뜰 때까지 넉넉히 대기 (1.5초 -> 3초 연장)
-            await new Promise(r => setTimeout(r, 3000));
+            // 🚨 [핵심 수술 2] 개인 순위도 회색 네모(스켈레톤)가 사라지고 진짜 태그가 뜰 때까지 스마트하게 대기
+            try { await page.waitForSelector('[class*="TextInfo_highlight__"]', { timeout: 10000 }); } catch(e) {}
+            await new Promise(r => setTimeout(r, 1000)); // 최종 안정화 1초
 
             finalPlayerRankings[cat.key] = await page.evaluate(() => {
                 const results = [];
@@ -215,7 +222,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] - 기획자님의 순정 로직 유지 & 렌더 타임아웃 방지
+// 3. [라인업 스크래퍼] - 완벽하게 작동 중이므로 건드리지 않음
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
