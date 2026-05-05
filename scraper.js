@@ -221,7 +221,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] - 🚨 경기 후 탭 튕김 현상 방지 & 푸시 차단용 상태값(status) 추가!
+// 3. [라인업 스크래퍼] - 🚨 스나이퍼 탭 클릭 로직 장착
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
@@ -256,14 +256,18 @@ export async function runLineupScraper() {
     const page = await setupTurboPage(browser); 
     await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded' });
     
-    // 🚨 [핵심 수술] 접속 직후, 네이버가 맘대로 '기록' 탭으로 튕겼다면 강제로 '라인업' 버튼 다시 클릭!
+    // 🚨 [수술 완료] 주소에 정확히 '/lineup'이 포함된 탭 버튼만 찾아서 누릅니다. (Menu 엉뚱 클릭 원천 차단)
     await new Promise(r => setTimeout(r, 2500));
     await page.evaluate(() => {
-        const tabs = Array.from(document.querySelectorAll('a, button, li, span, em'));
-        const lineupTab = tabs.find(el => el.innerText && el.innerText.trim() === '라인업');
-        if (lineupTab) lineupTab.click();
+        const lineupLinks = document.querySelectorAll('a[href*="/lineup"]');
+        for (let link of lineupLinks) {
+            if (link.offsetHeight > 0) { // 화면에 보이는 진짜 탭만 클릭
+                link.click();
+                break;
+            }
+        }
     });
-    await new Promise(r => setTimeout(r, 2000)); // 탭 전환 대기
+    await new Promise(r => setTimeout(r, 2000)); 
 
     try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) { console.log("이름 태그 대기 타임아웃 (무시하고 진행)"); }
     
@@ -357,7 +361,7 @@ export async function runLineupScraper() {
         matchInfo: { 
             opponent: isDaejeonHome ? targetMatch.awayTeam : targetMatch.homeTeam, 
             date: targetMatch.dateKey,
-            status: targetMatch.status // 🚨 경기 종료 후 푸시를 막기 위해 현재 상태값 추가!
+            status: targetMatch.status // 🚨 푸시 차단용 상태값 저장
         },
         DAEJEON: isDaejeonHome ? homeFinal : awayFinal, DAEJEON_BENCH: isDaejeonHome ? homeFinal.bench : awayFinal.bench,
         OPPONENT: isDaejeonHome ? awayFinal : homeFinal, OPPONENT_BENCH: isDaejeonHome ? awayFinal.bench : homeFinal.bench
