@@ -95,12 +95,12 @@ export async function runScheduleScraper(isFullSync = false) {
                         const timeStr = timeMatch ? timeMatch[0] : "미정";
 
                         let rawStatus = item.querySelector('[class*="MatchBox_status"]')?.innerText.trim() || "경기전";
-                        // 🚨 [수술 완료] "전반종료"는 그대로 냅두고, 그 외의 "종료"만 "경기종료"로 처리!
+                        // 🚨 "전반종료"는 그대로 냅두고, 그 외의 "종료"만 "경기종료"로 처리!
                         let appStatus = rawStatus;
                         if (rawStatus === "예정") appStatus = "경기전";
                         else if (rawStatus === "전반종료") appStatus = "전반종료";
                         else if (rawStatus.includes("종료")) appStatus = "경기종료";
-                      
+                        
                         const teamEls = item.querySelectorAll('[class*="MatchBoxHeadToHeadArea_team__"]');
                         if (teamEls.length < 2) return;
                         const homeTeam = teamEls[0].innerText.trim();
@@ -145,7 +145,7 @@ export async function runScheduleScraper(isFullSync = false) {
 }
 
 // ==========================================
-// 2. [순위 스크래퍼] - 🚨 무식한 시간 대기 삭제, 스마트 센서 장착 완료
+// 2. [순위 스크래퍼] 
 // ==========================================
 export async function runRankingsScraper() {
   console.log(`\n🚀 [순위] ${TARGET_YEAR}년 랭킹 데이터 수집 시작...`);
@@ -157,24 +157,21 @@ export async function runRankingsScraper() {
     const finalPlayerRankings = {};
 
     await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await new Promise(r => setTimeout(r, 2000)); // 최초 기본 뼈대 로딩 대기
+    await new Promise(r => setTimeout(r, 2000)); 
 
     console.log(`🛡️ [팀 순위] 데이터 추출 준비 중...`);
     await page.evaluate(() => { const teamBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('팀 순위')); if(teamBtn) teamBtn.click(); });
     
-    // 🚨 [핵심 수술 1] 4초 맹목적 대기 삭제 -> 순위표 태그가 실제로 렌더링될 때까지 감시 (최대 15초 대기)
     try {
         await page.waitForSelector('[class*="TableBody_item__"]', { timeout: 15000 });
     } catch (e) {
         console.log("⚠️ 팀 순위 표 로딩 지연 (렌더 서버 렉 발생 중)");
     }
     
-    // 렌더링이 완전히 그려지도록 살짝 스크롤 해줌 (렌더 서버 팁)
     await page.evaluate(async () => { window.scrollBy(0, 500); await new Promise(r => setTimeout(r, 500)); window.scrollTo(0, 0); });
 
     teamStandings = await page.evaluate(() => {
         const results = [];
-        // 기획자님의 완벽한 원본 로직 유지
         document.querySelectorAll('.TableBody_type_team_record [class*="TableBody_item__"], [class*="TableBody_item__"]').forEach((row, idx) => {
             const teamName = row.querySelector('strong, [class*="TeamInfo_name__"], [class*="name__"]')?.textContent.trim();
             if(!teamName) return;
@@ -197,9 +194,8 @@ export async function runRankingsScraper() {
         try {
             await page.evaluate((catName) => { const targetBtn = Array.from(document.querySelectorAll('[class*="TableHead_button_sort__"]')).find(btn => btn.textContent.includes(catName)); if (targetBtn) targetBtn.click(); }, cat.name);
             
-            // 🚨 [핵심 수술 2] 개인 순위도 회색 네모(스켈레톤)가 사라지고 진짜 태그가 뜰 때까지 스마트하게 대기
             try { await page.waitForSelector('[class*="TextInfo_highlight__"]', { timeout: 10000 }); } catch(e) {}
-            await new Promise(r => setTimeout(r, 1000)); // 최종 안정화 1초
+            await new Promise(r => setTimeout(r, 1000)); 
 
             finalPlayerRankings[cat.key] = await page.evaluate(() => {
                 const results = [];
@@ -226,7 +222,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] - 완벽하게 작동 중이므로 건드리지 않음
+// 3. [라인업 스크래퍼] - 🚨 평점 누락 방지: 선수기록 탭 강제 진입 & 소수점 스캐너 장착
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
@@ -316,20 +312,52 @@ export async function runLineupScraper() {
 
     await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3500)); 
+
+    // 🚨 [수술 1] 팀 기록 탭이 먼저 뜨는 경우 방지, 무조건 '선수 기록' 버튼 찾아서 누르기
+    await page.evaluate(() => {
+        const tabs = Array.from(document.querySelectorAll('a, button, li, span, em'));
+        const playerTabBtn = tabs.find(el => el.innerText && el.innerText.includes('선수 기록'));
+        if (playerTabBtn) playerTabBtn.click();
+    });
+    await new Promise(r => setTimeout(r, 2000));
+
     await page.evaluate(async () => { window.scrollBy(0, 1500); await new Promise(r => setTimeout(r, 500)); window.scrollBy(0, -1500); });
 
     const recordData = await page.evaluate(() => {
         const ratings = {}; const goals = {}; const ownGoals = {}; 
+        
+        // 🚨 [수술 2] HTML 구조 무시하고 무조건 이름과 소수점을 낚아채는 스캐너
         document.querySelectorAll('tbody tr').forEach(tr => {
-            const nameEl = tr.querySelector('th span.blind');
-            if (nameEl) {
-                let nameParts = nameEl.innerText.trim().split(' ');
-                if (['FW', 'MF', 'DF', 'GK'].includes(nameParts[nameParts.length - 1])) nameParts.pop();
-                const cleanName = nameParts.join(' ').replace(/[0-9'’′]/g, '').trim();
-                const tds = tr.querySelectorAll('td');
-                if (tds.length >= 2) { const rating = tds[tds.length - 2].innerText.trim(); if (rating && rating !== '-') ratings[cleanName] = rating; }
+            const nameEl = tr.querySelector('[class*="name"]') || tr.querySelector('th, td');
+            if (!nameEl) return;
+            
+            let rawName = nameEl.innerText || '';
+            let cleanName = rawName
+                .replace(/[0-9'’′]/g, '')
+                .replace(/\b(FW|MF|DF|GK)\b/gi, '')
+                .replace(/\(교체\)/gi, '')
+                .trim()
+                .split('\n')[0]; 
+
+            if (!cleanName) return;
+
+            const tds = Array.from(tr.querySelectorAll('td'));
+            if (tds.length > 0) {
+                const reversedTexts = tds.map(td => td.innerText.trim()).reverse();
+                // 끝에서부터 역순으로 '7.5', '6.0' 같은 소수점 숫자를 찾습니다.
+                const ratingStr = reversedTexts.find(text => /^\d+\.\d+$/.test(text));
+                
+                if (ratingStr) {
+                    ratings[cleanName] = ratingStr; 
+                } else if (tds.length >= 2) {
+                    const fallback = tds[tds.length - 2].innerText.trim();
+                    if (fallback && fallback !== '-') {
+                        ratings[cleanName] = fallback;
+                    }
+                }
             }
         });
+
         document.querySelectorAll('[class*="ScoreBox_score_list"]').forEach(list => {
             list.querySelectorAll('li').forEach(item => {
                 const nameEl = item.querySelector('[class*="name"]');
@@ -351,6 +379,7 @@ export async function runLineupScraper() {
 
     const merge = (p) => {
         if (!p || !p.name) return p || { name: '' };
+        // 🚨 이름의 띄어쓰기를 싹 다 없애서 100% 안전하게 매칭 (예: '이 순민' -> '이순민')
         const clean = p.name.replace(/\s+/g, '');
         p.rating = recordData.ratings[Object.keys(recordData.ratings).find(k => k.replace(/\s+/g, '') === clean)] || '-';
         p.goals = recordData.goals[Object.keys(recordData.goals).find(k => k.replace(/\s+/g, '') === clean)] || 0;
