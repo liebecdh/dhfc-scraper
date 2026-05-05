@@ -32,6 +32,7 @@ const PLAYER_CATEGORIES = [
   { name: 'MOM', key: 'mom' }, { name: '평균평점', key: 'rating' }, { name: 'BEST11', key: 'best11' }
 ];
 
+// 일정/순위 스크래핑용 고속 페이지 세팅 (라인업에는 사용하지 않음)
 async function setupTurboPage(browser) {
     const page = await browser.newPage();
     page.setDefaultNavigationTimeout(0);
@@ -221,7 +222,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] - 🚨 스나이퍼 탭 클릭 로직 장착
+// 3. [라인업 스크래퍼] - 🚨 기획자님의 터미널 환경과 100% 동일한 '순정' 로직 적용 완료
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
@@ -253,23 +254,23 @@ export async function runLineupScraper() {
     if (!targetMatch || !targetMatch.naverGameId) { console.log(`⚠️ 수집 가능한 대전 경기를 찾을 수 없습니다.`); return; }
     console.log(`🎯 타겟팅 성공: [${targetMatch.dateKey}] ${targetMatch.match}`);
     
-    const page = await setupTurboPage(browser); 
-    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded' });
+    // 🚨 [핵심 수술] 터미널 환경과 동일하게 CSS/이미지 차단 없이 페이지를 온전히 엽니다!
+    const page = await browser.newPage();
+    await page.setCacheEnabled(false);
+    await page.setUserAgent('Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36');
+    await page.setViewport({ width: 412, height: 915, isMobile: true, hasTouch: true });
     
-    // 🚨 [수술 완료] 주소에 정확히 '/lineup'이 포함된 탭 버튼만 찾아서 누릅니다. (Menu 엉뚱 클릭 원천 차단)
-    await new Promise(r => setTimeout(r, 2500));
+    // 네트워크가 완전히 조용해질 때까지 기다립니다 (기획자님 로컬 코드와 동일)
+    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'networkidle2' });
+    
+    // 경기 후 기록 탭으로 튕겼다면 강제로 라인업 탭 클릭
+    await new Promise(r => setTimeout(r, 1500));
     await page.evaluate(() => {
-        const lineupLinks = document.querySelectorAll('a[href*="/lineup"]');
-        for (let link of lineupLinks) {
-            if (link.offsetHeight > 0) { // 화면에 보이는 진짜 탭만 클릭
-                link.click();
-                break;
-            }
-        }
+        const lineupTab = document.querySelector('a[href$="/lineup"]');
+        if(lineupTab) lineupTab.click();
     });
-    await new Promise(r => setTimeout(r, 2000)); 
 
-    try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) { console.log("이름 태그 대기 타임아웃 (무시하고 진행)"); }
+    try { await page.waitForSelector('[class*="name" i]', { timeout: 8000 }); } catch (e) { console.log("이름 태그 대기 타임아웃 (무시하고 진행)"); }
     
     await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 6000) { clearInterval(t); r(); } }, 100); }); });
     await new Promise(r => setTimeout(r, 1000));
@@ -279,6 +280,7 @@ export async function runLineupScraper() {
         const exactBlocked = ['감독', '코치', '승', '무', '패', '기록', '상세', '보기', '교체', '투입', '아웃', '홈', '원정'];
         const teamNames = ['서울', '대전', '울산', '포항', '김천', '제주', '전북', '광주', '강원', '인천', '대구', '수원', '안양', '부천'];
 
+        // 터미널과 동일한 태그 검색 방식 유지
         document.querySelectorAll('[class*="player_item" i], [class*="Formation_player" i], [class*="player_card" i]').forEach((wrap) => {
             const nameEl = wrap.querySelector('[class*="name" i]');
             if (!nameEl) return;
@@ -286,7 +288,7 @@ export async function runLineupScraper() {
             if (!mainNameText || mainNameText.length > 7 || exactBlocked.includes(mainNameText) || teamNames.includes(mainNameText)) return; 
 
             const no = parseInt(wrap.querySelector('[class*="number" i], [class*="num" i]')?.innerText.trim() || '0', 10);
-            if (no === 0) return;
+            if (no === 0 || isNaN(no)) return;
 
             const uniqueKey = `${no}_${mainNameText}`;
             let existing = playersMap.get(uniqueKey) || { no, name: mainNameText, pos: wrap.querySelector('[class*="pos" i]')?.innerText.trim() || '', photo: null, rating: '-', goals: 0, ownGoals: 0, subTime: null, subOutFlag: false, replacedName: null, yellowCard: wrap.innerHTML.includes('경고'), redCard: wrap.innerHTML.includes('퇴장'), rectLeft: wrap.getBoundingClientRect().left };
@@ -309,7 +311,7 @@ export async function runLineupScraper() {
 
     if (extractedData.players.length === 0) { console.log(`⚠️ 경기 전입니다. 라인업이 아직 발표되지 않았습니다.`); return; }
 
-    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'networkidle2' });
     await new Promise(r => setTimeout(r, 3500)); 
     await page.evaluate(async () => { window.scrollBy(0, 1500); await new Promise(r => setTimeout(r, 500)); window.scrollBy(0, -1500); });
 
@@ -361,7 +363,7 @@ export async function runLineupScraper() {
         matchInfo: { 
             opponent: isDaejeonHome ? targetMatch.awayTeam : targetMatch.homeTeam, 
             date: targetMatch.dateKey,
-            status: targetMatch.status // 🚨 푸시 차단용 상태값 저장
+            status: targetMatch.status || '경기종료'
         },
         DAEJEON: isDaejeonHome ? homeFinal : awayFinal, DAEJEON_BENCH: isDaejeonHome ? homeFinal.bench : awayFinal.bench,
         OPPONENT: isDaejeonHome ? awayFinal : homeFinal, OPPONENT_BENCH: isDaejeonHome ? awayFinal.bench : homeFinal.bench
@@ -369,7 +371,7 @@ export async function runLineupScraper() {
     
     if (finalLineup.DAEJEON.goalkeeper?.name) {
         await updateDoc(targetDocRef, { "content.lineupData": finalLineup });
-        console.log(`🎉 [라인업] ${targetMatch.match} DB 저장 완료!`);
+        console.log(`🎉 [라인업/기록] ${targetMatch.match} DB 저장 완료!`);
     }
 
   } catch (error) { console.error("❌ 내부 오류:", error); } 
