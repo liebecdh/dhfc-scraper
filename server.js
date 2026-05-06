@@ -102,7 +102,7 @@ function startLineupObserver() {
       const opponent = lineupData.matchInfo.opponent || todayMatchInfo?.opponent || '상대팀';
       const title = todayMatchInfo?.title || 'K리그1';
 
-      // 🚨 [궁극의 수술] 무조건 강제 인식되는 해시(#) 주소로 발송! (라인업)
+      // 🚨 [최종 수술 1] 스마트폰을 속이기 위해 주소 끝에 난수(Date.now)를 무조건 붙임!
       const messagePayload = {
         notification: {
           title: `🚨 [선발 라인업 발표]`,
@@ -110,7 +110,7 @@ function startLineupObserver() {
         },
         webpush: {
           fcmOptions: {
-            link: "https://dhfc-shift.vercel.app/#K-LEAGUE" 
+            link: `https://dhfc-shift.vercel.app/?tab=K-LEAGUE&t=${Date.now()}` 
           }
         },
         tokens: targetTokens
@@ -172,7 +172,7 @@ function startChatObserver() {
     const senderName = profiles[latestMsg.sender]?.name || '가족';
     const notifyBody = latestMsg.imageUrl ? '(사진)' : latestMsg.text;
 
-    // 🚨 [궁극의 수술] 무조건 강제 인식되는 해시(#) 주소로 발송! (채팅)
+    // 🚨 [최종 수술 2] 스마트폰을 속이기 위해 주소 끝에 난수(Date.now)를 무조건 붙임!
     const messagePayload = {
       notification: {
         title: `${senderName}님의 메시지 💬`,
@@ -180,7 +180,7 @@ function startChatObserver() {
       },
       webpush: {
         fcmOptions: {
-          link: "https://dhfc-shift.vercel.app/#CHAT" 
+          link: `https://dhfc-shift.vercel.app/?tab=CHAT&t=${Date.now()}` 
         }
       },
       tokens: targetTokens
@@ -261,7 +261,6 @@ cron.schedule('0 0 * * *', async () => {
     }
   });
 }, { timezone: "Asia/Seoul" });
-
 
 cron.schedule('1 15 * * *', async () => {
   await safeExecute('15시 마스터 일정 전수 업데이트', async () => {
