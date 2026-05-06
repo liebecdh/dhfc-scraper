@@ -102,16 +102,12 @@ function startLineupObserver() {
       const opponent = lineupData.matchInfo.opponent || todayMatchInfo?.opponent || '상대팀';
       const title = todayMatchInfo?.title || 'K리그1';
 
-      // 🚨 [수정한 부분] Vercel 주소 하드코딩 + 해시(#) 라우팅 적용 (라인업)
+      // 🚨 [수정된 부분] FCM 기본 알림(notification) 대신 데이터(data)만 전송
       const messagePayload = {
-        notification: {
+        data: {
           title: `🚨 [선발 라인업 발표]`,
-          body: `${title} 대전 VS ${opponent} 출전 명단이 업데이트되었습니다! ⚽🔥`
-        },
-        webpush: {
-          fcmOptions: {
-            link: "https://dhfc-shift.vercel.app/#K-LEAGUE" 
-          }
+          body: `${title} 대전 VS ${opponent} 출전 명단이 업데이트되었습니다! ⚽🔥`,
+          tab: "K-LEAGUE"
         },
         tokens: targetTokens
       };
@@ -172,16 +168,12 @@ function startChatObserver() {
     const senderName = profiles[latestMsg.sender]?.name || '가족';
     const notifyBody = latestMsg.imageUrl ? '(사진)' : latestMsg.text;
 
-    // 🚨 [수정한 부분] Vercel 주소 하드코딩 + 해시(#) 라우팅 적용 (채팅)
+    // 🚨 [수정된 부분] FCM 기본 알림(notification) 대신 데이터(data)만 전송
     const messagePayload = {
-      notification: {
+      data: {
         title: `${senderName}님의 메시지 💬`,
-        body: notifyBody
-      },
-      webpush: {
-        fcmOptions: {
-          link: "https://dhfc-shift.vercel.app/#CHAT" 
-        }
+        body: notifyBody,
+        tab: "CHAT"
       },
       tokens: targetTokens
     };
