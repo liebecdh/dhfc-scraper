@@ -95,7 +95,6 @@ export async function runScheduleScraper(isFullSync = false) {
                         const timeStr = timeMatch ? timeMatch[0] : "미정";
 
                         let rawStatus = item.querySelector('[class*="MatchBox_status"]')?.innerText.trim() || "경기전";
-                        // 🚨 "전반종료"는 그대로 냅두고, 그 외의 "종료"만 "경기종료"로 처리!
                         let appStatus = rawStatus;
                         if (rawStatus === "예정") appStatus = "경기전";
                         else if (rawStatus === "전반종료") appStatus = "전반종료";
@@ -222,7 +221,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] - 🚨 평점 누락 방지: 선수기록 탭 강제 진입 & 소수점 스캐너 장착
+// 3. [라인업 스크래퍼] - 🚨 어제 경기까지 완벽 커버 & 투명 태그 무시 스캐너
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
@@ -235,7 +234,14 @@ export async function runLineupScraper() {
 
     const content = docSnap.data().content;
     const fixtures = content.kLeagueFixtures;
+    
+    // 🚨 12시 스케줄러를 위해 '오늘'과 '어제' 날짜를 모두 준비합니다.
     const now = new Date();
+    const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+    
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const yesterdayStr = `${yesterday.getFullYear()}-${yesterday.getMonth() + 1}-${yesterday.getDate()}`;
     
     const parseSafeDate = (dateKey, timeStr = '00:00') => {
         const [y, m, d] = dateKey.split('-').map(Number);
@@ -243,15 +249,19 @@ export async function runLineupScraper() {
         return new Date(y, m - 1, d, hh, mm);
     };
 
-    let targetMatch = null;
+    // 정렬된 일정에서 어제나 오늘 치러진 대전 경기부터 찾습니다.
     const sortedFixtures = Object.values(fixtures).sort((a, b) => parseSafeDate(a.dateKey, a.time) - parseSafeDate(b.dateKey, b.time));
+    
+    let targetMatch = sortedFixtures.find(m => 
+        (m.dateKey === todayStr || m.dateKey === yesterdayStr) && 
+        (m.homeTeam.includes('대전') || m.awayTeam.includes('대전'))
+    );
 
-    for (const match of sortedFixtures) {
-        const matchDate = parseSafeDate(match.dateKey, "23:59"); 
-        if ((match.homeTeam.includes('대전') || match.awayTeam.includes('대전')) && matchDate >= now) { targetMatch = match; break; }
+    if (!targetMatch || !targetMatch.naverGameId) { 
+        console.log(`⚠️ 수집 가능한(어제 혹은 오늘) 대전 경기를 찾을 수 없습니다.`); 
+        return; 
     }
-
-    if (!targetMatch || !targetMatch.naverGameId) { console.log(`⚠️ 수집 가능한 대전 경기를 찾을 수 없습니다.`); return; }
+    
     console.log(`🎯 타겟팅 성공: [${targetMatch.dateKey}] ${targetMatch.match}`);
     
     const page = await setupTurboPage(browser); 
@@ -310,10 +320,10 @@ export async function runLineupScraper() {
 
     if (extractedData.players.length === 0) { console.log(`⚠️ 경기 전입니다. 라인업이 아직 발표되지 않았습니다.`); return; }
 
+    // 🚨 여기서부터 기록(평점) 탭 무적 스캐너 로직
     await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3500)); 
 
-    // 🚨 [수술 1] 팀 기록 탭이 먼저 뜨는 경우 방지, 무조건 '선수 기록' 버튼 찾아서 누르기
     await page.evaluate(() => {
         const tabs = Array.from(document.querySelectorAll('a, button, li, span, em'));
         const playerTabBtn = tabs.find(el => el.innerText && el.innerText.includes('선수 기록'));
@@ -326,25 +336,18 @@ export async function runLineupScraper() {
     const recordData = await page.evaluate(() => {
         const ratings = {}; const goals = {}; const ownGoals = {}; 
         
-        // 🚨 [수술 2] HTML 구조 무시하고 무조건 이름과 소수점을 낚아채는 스캐너
         document.querySelectorAll('tbody tr').forEach(tr => {
             const nameEl = tr.querySelector('[class*="name"]') || tr.querySelector('th, td');
             if (!nameEl) return;
             
             let rawName = nameEl.innerText || '';
-            let cleanName = rawName
-                .replace(/[0-9'’′]/g, '')
-                .replace(/\b(FW|MF|DF|GK)\b/gi, '')
-                .replace(/\(교체\)/gi, '')
-                .trim()
-                .split('\n')[0]; 
+            let cleanName = rawName.replace(/[0-9'’′]/g, '').replace(/\b(FW|MF|DF|GK)\b/gi, '').replace(/\(교체\)/gi, '').trim().split('\n')[0]; 
 
             if (!cleanName) return;
 
             const tds = Array.from(tr.querySelectorAll('td'));
             if (tds.length > 0) {
                 const reversedTexts = tds.map(td => td.innerText.trim()).reverse();
-                // 끝에서부터 역순으로 '7.5', '6.0' 같은 소수점 숫자를 찾습니다.
                 const ratingStr = reversedTexts.find(text => /^\d+\.\d+$/.test(text));
                 
                 if (ratingStr) {
@@ -379,7 +382,6 @@ export async function runLineupScraper() {
 
     const merge = (p) => {
         if (!p || !p.name) return p || { name: '' };
-        // 🚨 이름의 띄어쓰기를 싹 다 없애서 100% 안전하게 매칭 (예: '이 순민' -> '이순민')
         const clean = p.name.replace(/\s+/g, '');
         p.rating = recordData.ratings[Object.keys(recordData.ratings).find(k => k.replace(/\s+/g, '') === clean)] || '-';
         p.goals = recordData.goals[Object.keys(recordData.goals).find(k => k.replace(/\s+/g, '') === clean)] || 0;
