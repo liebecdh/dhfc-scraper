@@ -102,7 +102,6 @@ function startLineupObserver() {
       const opponent = lineupData.matchInfo.opponent || todayMatchInfo?.opponent || '상대팀';
       const title = todayMatchInfo?.title || 'K리그1';
 
-      // 🚨 [수정된 부분] FCM 기본 알림(notification) 대신 데이터(data)만 전송
       const messagePayload = {
         data: {
           title: `🚨 [선발 라인업 발표]`,
@@ -168,7 +167,6 @@ function startChatObserver() {
     const senderName = profiles[latestMsg.sender]?.name || '가족';
     const notifyBody = latestMsg.imageUrl ? '(사진)' : latestMsg.text;
 
-    // 🚨 [수정된 부분] FCM 기본 알림(notification) 대신 데이터(data)만 전송
     const messagePayload = {
       data: {
         title: `${senderName}님의 메시지 💬`,
@@ -259,6 +257,33 @@ cron.schedule('1 15 * * *', async () => {
   await safeExecute('15시 마스터 일정 전수 업데이트', async () => {
     await runScheduleScraper(true); 
     await updateTodayMatchMemory(); 
+  });
+}, { timezone: "Asia/Seoul" });
+
+// 🚨 [수정 완료] 낮 12시 스케줄러: 어제 경기가 있었을 때만 평점을 긁어옵니다.
+cron.schedule('0 12 * * *', async () => {
+  await safeExecute('낮 12시 전날 경기 평점 체크', async () => {
+    const targetDocRef = doc(db, 'artifacts', 'daejeon-shift-pro-test-sandbox', 'public', 'data', 'userSchedules_v305', '조아');
+    const snap = await getDoc(targetDocRef);
+    if (!snap.exists()) return;
+    
+    const fixtures = snap.data().content?.kLeagueFixtures || {};
+    const now = new Date();
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const yesterdayStr = `${yesterday.getFullYear()}-${yesterday.getMonth() + 1}-${yesterday.getDate()}`;
+
+    // 어제 대전 경기가 있었는지 확인
+    const wasMatchYesterday = Object.values(fixtures).some(m => 
+      m.dateKey === yesterdayStr && (m.homeTeam.includes('대전') || m.awayTeam.includes('대전'))
+    );
+
+    if (wasMatchYesterday) {
+      console.log(`🏟️ [평점 수거] 어제 대전 경기가 확인되었습니다. 평점 업데이트를 시작합니다.`);
+      await runLineupScraper();
+    } else {
+      console.log(`📭 [평점 수거 스킵] 어제는 대전 경기가 없었습니다.`);
+    }
   });
 }, { timezone: "Asia/Seoul" });
 
