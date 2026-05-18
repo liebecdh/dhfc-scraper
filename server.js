@@ -369,7 +369,7 @@ cron.schedule('*/14 * * * *', async () => {
   try {
     // ⚠️ 아래 주소를 기획자님의 실제 '렌더 서버 URL'로 무조건 바꿔주셔야 합니다!
     // 예: const RENDER_URL = 'https://dhfc-scraper.onrender.com';
-    const RENDER_URL = 'https://여기에_기획자님의_렌더_서버_주소를_넣으세요.onrender.com'; 
+    const RENDER_URL = 'https://dhfc-server.onrender.com'; 
     
     await fetch(RENDER_URL);
     console.log(`💓 [수면 방지] 14분 주기 심박수 체크 완료`);
