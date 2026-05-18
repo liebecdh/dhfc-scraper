@@ -64,19 +64,17 @@ export async function runScheduleScraper(isFullSync = false) {
             const page = await setupTurboPage(browser); 
             
             try {
-                await page.goto(`https://m.sports.naver.com/kfootball/schedule/index?category=kleague&date=${TARGET_YEAR}-${monthStr}-01`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                await page.goto(`https://m.sports.naver.com/kfootball/schedule/index?category=kleague&date=${TARGET_YEAR}-${monthStr}-01`, { waitUntil: 'networkidle2', timeout: 60000 });
                 await new Promise(r => setTimeout(r, 3500));
 
                 try { await page.waitForSelector('[class*="MatchBox_match_item"]', { timeout: 5000 }); } catch (e) { /* 무시 */ }
 
-                await page.evaluate(async () => {
-                    await new Promise((resolve) => {
-                        let totalHeight = 0; const distance = 400;
-                        const timer = setInterval(() => { window.scrollBy(0, distance); totalHeight += distance;
-                            if (totalHeight >= document.body.scrollHeight || totalHeight > 10000) { clearInterval(timer); window.scrollTo(0, 0); resolve(); }
-                        }, 150);
-                    });
-                });
+                // 🚨 에러 방어막: 브라우저 내부 타이머 대신 서버 통제 스크롤 적용
+                for (let i = 0; i < 20; i++) {
+                    try { await page.evaluate(() => window.scrollBy(0, 500)); } catch(e){}
+                    await new Promise(r => setTimeout(r, 150));
+                }
+                try { await page.evaluate(() => window.scrollTo(0, 0)); } catch(e){}
                 await new Promise(r => setTimeout(r, 1000));
 
                 const monthGames = await page.evaluate((year, vMap) => {
@@ -155,19 +153,20 @@ export async function runRankingsScraper() {
     let teamStandings = [];
     const finalPlayerRankings = {};
 
-    await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await new Promise(r => setTimeout(r, 2000)); 
+    await page.goto(`https://m.sports.naver.com/kfootball/record/kleague?seasonCode=${TARGET_YEAR}`, { waitUntil: 'networkidle2', timeout: 60000 });
+    await new Promise(r => setTimeout(r, 3000)); 
 
     console.log(`🛡️ [팀 순위] 데이터 추출 준비 중...`);
-    await page.evaluate(() => { const teamBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('팀 순위')); if(teamBtn) teamBtn.click(); });
-    
     try {
-        await page.waitForSelector('[class*="TableBody_item__"]', { timeout: 15000 });
-    } catch (e) {
-        console.log("⚠️ 팀 순위 표 로딩 지연 (렌더 서버 렉 발생 중)");
-    }
+        await page.evaluate(() => { const teamBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('팀 순위')); if(teamBtn) teamBtn.click(); });
+    } catch(e) { console.log('⚠️ 팀 순위 버튼 클릭 실패(무시):', e.message); }
     
-    await page.evaluate(async () => { window.scrollBy(0, 500); await new Promise(r => setTimeout(r, 500)); window.scrollTo(0, 0); });
+    try { await page.waitForSelector('[class*="TableBody_item__"]', { timeout: 15000 }); } catch (e) { console.log("⚠️ 팀 순위 표 로딩 지연"); }
+    
+    // 🚨 에러 방어막: 브라우저 내부 타이머 대신 서버 통제 스크롤 적용
+    try { await page.evaluate(() => window.scrollBy(0, 500)); } catch(e){}
+    await new Promise(r => setTimeout(r, 500));
+    try { await page.evaluate(() => window.scrollTo(0, 0)); } catch(e){}
 
     teamStandings = await page.evaluate(() => {
         const results = [];
@@ -182,10 +181,17 @@ export async function runRankingsScraper() {
     });
 
     console.log(`🏃‍♂️ [선수 기록] 탭으로 이동 중...`);
-    await page.evaluate(() => { const playerBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('선수 기록')); if(playerBtn) playerBtn.click(); });
+    try {
+        await page.evaluate(() => { const playerBtn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('선수 기록')); if(playerBtn) playerBtn.click(); });
+    } catch(e){}
     await new Promise(r => setTimeout(r, 2000));
     
-    await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 8000) { clearInterval(t); window.scrollTo(0, 0); r(); } }, 100); }); });
+    // 🚨 에러 방어막: 브라우저 내부 타이머 대신 서버 통제 스크롤 적용
+    for (let i = 0; i < 20; i++) {
+        try { await page.evaluate(() => window.scrollBy(0, 400)); } catch(e){}
+        await new Promise(r => setTimeout(r, 100));
+    }
+    try { await page.evaluate(() => window.scrollTo(0, 0)); } catch(e){}
     await new Promise(r => setTimeout(r, 1500));
 
     for (const cat of PLAYER_CATEGORIES) {
@@ -221,7 +227,7 @@ export async function runRankingsScraper() {
 }
 
 // ==========================================
-// 3. [라인업 스크래퍼] - 🚨 어제 경기까지 완벽 커버 & 투명 태그 무시 스캐너
+// 3. [라인업 스크래퍼] - 어제 경기 스캔 기능 포함
 // ==========================================
 export async function runLineupScraper() {
   console.log(`\n🔍 [라인업] 대전 경기 탐색 중...`);
@@ -235,10 +241,10 @@ export async function runLineupScraper() {
     const content = docSnap.data().content;
     const fixtures = content.kLeagueFixtures;
     
-    // 🚨 12시 스케줄러를 위해 '오늘'과 '어제' 날짜를 모두 준비합니다.
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
     
+    // 🚨 어제 날짜 계산 (낮 12시 평점 소생용)
     const yesterday = new Date(now);
     yesterday.setDate(now.getDate() - 1);
     const yesterdayStr = `${yesterday.getFullYear()}-${yesterday.getMonth() + 1}-${yesterday.getDate()}`;
@@ -249,9 +255,9 @@ export async function runLineupScraper() {
         return new Date(y, m - 1, d, hh, mm);
     };
 
-    // 정렬된 일정에서 어제나 오늘 치러진 대전 경기부터 찾습니다.
     const sortedFixtures = Object.values(fixtures).sort((a, b) => parseSafeDate(a.dateKey, a.time) - parseSafeDate(b.dateKey, b.time));
     
+    // 🚨 '어제' 경기이거나 '오늘' 경기인 대전 매치 찾기
     let targetMatch = sortedFixtures.find(m => 
         (m.dateKey === todayStr || m.dateKey === yesterdayStr) && 
         (m.homeTeam.includes('대전') || m.awayTeam.includes('대전'))
@@ -266,23 +272,26 @@ export async function runLineupScraper() {
     
     const page = await setupTurboPage(browser); 
     
-    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/lineup`, { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise(r => setTimeout(r, 4500));
     
-    await page.evaluate(() => {
-        const lineupLinks = document.querySelectorAll('a[href*="/lineup"]');
-        for (let link of lineupLinks) {
-            if (link.offsetHeight > 0) {
-                link.click();
-                break;
+    try {
+        await page.evaluate(() => {
+            const lineupLinks = document.querySelectorAll('a[href*="/lineup"]');
+            for (let link of lineupLinks) {
+                if (link.offsetHeight > 0) { link.click(); break; }
             }
-        }
-    });
+        });
+    } catch(e){}
     await new Promise(r => setTimeout(r, 2000)); 
 
     try { await page.waitForSelector('[class*="name" i]', { timeout: 10000 }); } catch (e) { /* 무시 */ }
     
-    await page.evaluate(async () => { await new Promise((r) => { let h = 0; const t = setInterval(() => { window.scrollBy(0, 400); h += 400; if (h > 6000) { clearInterval(t); r(); } }, 100); }); });
+    // 🚨 에러 방어막: 브라우저 내부 타이머 대신 서버 통제 스크롤 적용
+    for (let i = 0; i < 15; i++) {
+        try { await page.evaluate(() => window.scrollBy(0, 400)); } catch(e){}
+        await new Promise(r => setTimeout(r, 100));
+    }
     await new Promise(r => setTimeout(r, 1000));
 
     const extractedData = await page.evaluate(() => {
@@ -320,18 +329,22 @@ export async function runLineupScraper() {
 
     if (extractedData.players.length === 0) { console.log(`⚠️ 경기 전입니다. 라인업이 아직 발표되지 않았습니다.`); return; }
 
-    // 🚨 여기서부터 기록(평점) 탭 무적 스캐너 로직
-    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(`https://m.sports.naver.com/game/${targetMatch.naverGameId}/record`, { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3500)); 
 
-    await page.evaluate(() => {
-        const tabs = Array.from(document.querySelectorAll('a, button, li, span, em'));
-        const playerTabBtn = tabs.find(el => el.innerText && el.innerText.includes('선수 기록'));
-        if (playerTabBtn) playerTabBtn.click();
-    });
+    try {
+        await page.evaluate(() => {
+            const tabs = Array.from(document.querySelectorAll('a, button, li, span, em'));
+            const playerTabBtn = tabs.find(el => el.innerText && el.innerText.includes('선수 기록'));
+            if (playerTabBtn) playerTabBtn.click();
+        });
+    } catch(e){}
     await new Promise(r => setTimeout(r, 2000));
 
-    await page.evaluate(async () => { window.scrollBy(0, 1500); await new Promise(r => setTimeout(r, 500)); window.scrollBy(0, -1500); });
+    // 🚨 에러 방어막: 브라우저 내부 타이머 대신 서버 통제 스크롤 적용
+    try { await page.evaluate(() => window.scrollBy(0, 1500)); } catch(e){}
+    await new Promise(r => setTimeout(r, 500));
+    try { await page.evaluate(() => window.scrollBy(0, -1500)); } catch(e){}
 
     const recordData = await page.evaluate(() => {
         const ratings = {}; const goals = {}; const ownGoals = {}; 
